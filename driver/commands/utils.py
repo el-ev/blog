@@ -206,6 +206,7 @@ def build_html_from_svgs(
     svg_href_rewrites: Optional[Dict[str, str]] = None,
     extract_title_from_pdf: bool = False,
     default_title: str = "Blog Post",
+    description: Optional[str] = None,
     hidden_text_override: Optional[str] = None,
     top_bar_html: str = "",
     revision_html: str = "",
@@ -254,6 +255,8 @@ def build_html_from_svgs(
     if hidden_text_override is not None:
         hidden_text = f'<div class="sr-only">\n{hidden_text_override}\n</div>'
 
+    meta_description = description if description else title
+    index_content = index_content.replace("{{DESCRIPTION}}", html.escape(meta_description))
     index_content = index_content.replace("{{TITLE}}", html.escape(title))
     index_content = index_content.replace("{{TEXT}}", hidden_text)
     index_content = index_content.replace("{{TOPBAR}}", top_bar_html)
@@ -309,6 +312,7 @@ def compile_and_build_html(
     dest_dir: str,
     title_format: str,
     default_title: str,
+    description: Optional[str] = None,
     inputs_svg: Optional[Dict[str, str]] = None,
     inputs_pdf: Optional[Dict[str, str]] = None,
     extract_title_from_pdf: bool = False,
@@ -345,5 +349,6 @@ def compile_and_build_html(
         svg_href_rewrites=svg_href_rewrites,
         extract_title_from_pdf=extract_title_from_pdf,
         default_title=default_title,
+        description=description,
         hidden_text_override=hidden_text_override,
     )

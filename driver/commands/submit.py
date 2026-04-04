@@ -131,7 +131,8 @@ def run_submit(args: Namespace) -> None:
         template_path=template_path,
         dest_dir=source_dest_dir,
         title_format="Source Files Page {i}",
-        default_title="Source Files List",
+        default_title=parsed_title,
+        description=parsed_title,
         extract_title_from_pdf=False,
         hidden_text_override=hidden_text,
     )

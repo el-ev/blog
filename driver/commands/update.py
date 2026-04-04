@@ -114,7 +114,8 @@ def update_content(args: Namespace) -> None:
         template_path=template_path,
         dest_dir=root_dir,
         title_format="Blog Content Page {i}",
-        default_title="Blog Content",
+        default_title=parsed_title,
+        description=parsed_subtitle,
         extract_title_from_pdf=False,
         hidden_text_override=hidden_text,
     )
