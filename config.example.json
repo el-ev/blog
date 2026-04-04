@@ -1,0 +1,6 @@
+{
+    "bucket": "your-bucket-name",
+    "prefix": "blog",
+    "project": "your-gcp-project-id",
+    "base_url": "https://example.com/blog/"
+}

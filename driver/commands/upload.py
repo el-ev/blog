@@ -1,6 +1,8 @@
 import os
 import sys
+import json
 from argparse import Namespace
+from typing import Dict, Any
 
 def run_upload(args: Namespace) -> None:
     try:
@@ -9,13 +11,25 @@ def run_upload(args: Namespace) -> None:
         print("'google-cloud-storage' is not installed.", file=sys.stderr)
         sys.exit(1)
 
-    bucket_name_raw = getattr(args, 'bucket', None)
+    config_data: Dict[str, Any] = {}
+    config_path: str = getattr(args, 'config', '')
+    if config_path and os.path.isfile(config_path):
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                config_data = json.load(f)
+        except Exception as e:
+            print(f"Failed to read config file '{config_path}': {e}", file=sys.stderr)
+
+    bucket_name_raw = getattr(args, 'bucket', None) or config_data.get("bucket")
     bucket_name: str = str(bucket_name_raw) if bucket_name_raw else ""
     if not bucket_name:
-        print("Please provide a bucket name using the --bucket argument.", file=sys.stderr)
+        print("Please provide a bucket name using the --bucket argument or in config JSON.", file=sys.stderr)
         sys.exit(1)
 
-    prefix: str = getattr(args, 'prefix', '')
+    prefix_raw = getattr(args, 'prefix', None)
+    if prefix_raw is None:
+        prefix_raw = config_data.get("prefix", "blog/")
+    prefix: str = str(prefix_raw) if prefix_raw else ""
     if prefix and not prefix.endswith('/'):
         prefix += '/'
 
@@ -23,7 +37,7 @@ def run_upload(args: Namespace) -> None:
     print(f"Uploading '{root_dir}' directory to GCS bucket '{bucket_name}' under prefix '{prefix}'...")
     
     try:
-        project_id_raw = getattr(args, 'project', None)
+        project_id_raw = getattr(args, 'project', None) or config_data.get("project")
         project_id: str = str(project_id_raw) if project_id_raw else ""
         if project_id:
             client = storage.Client(project=project_id)

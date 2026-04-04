@@ -175,11 +175,20 @@ def patch_svg_file(
     with open(dst_path, "w", encoding="utf-8") as svg_file:
         svg_file.write(svg_data)
 
-    if match_vb:
+    svgo_path = shutil.which("svgo") or shutil.which("svgo.cmd")
+    if svgo_path:
+        try:
+            subprocess.run([svgo_path, dst_path, "-o", dst_path], check=True, capture_output=True)
+        except subprocess.CalledProcessError as e:
+            print(f"SVGO failed for {dst_path}", file=sys.stderr)
+            if e.stderr:
+                print(e.stderr.decode("utf-8"), file=sys.stderr)
         w, h = float(match_vb.group(1)), float(match_vb.group(2))
         aspect_ratio = f"{w} / {h}"
         if match_w:
             max_width_style = f"max-width: {match_w.group(1)}; width: 100%;"
+    else:
+        print("SVGO not found, skipping SVG optimization.", file=sys.stderr)
             
     return aspect_ratio, max_width_style
 

@@ -6,6 +6,7 @@ from argparse import ArgumentParser, BooleanOptionalAction, Namespace
 from commands.init import run_init
 from commands.compile import run_compile
 from commands.submit import run_submit
+from commands.update import update_content as run_update
 from commands.upload import run_upload
 
 
@@ -38,22 +39,24 @@ def _add_command_parsers(subparsers: argparse._SubParsersAction) -> None:
         dest="amend",
     )
     subparsers.add_parser("submit", parents=[submit_parser], add_help=False)
-
+    update_parser = subparsers.add_parser(
+        "update", help="Update the auxiliary files like the content list and sitemap."
+    )
     upload_parser = subparsers.add_parser(
         "upload", help="Upload the generated root directory to Google Cloud Storage"
     )
     upload_parser.add_argument(
-        "--bucket", required=True, help="Name of the GCS bucket to upload the content to."
+        "--bucket", required=False, help="Name of the GCS bucket to upload the content to. Overrides config."
     )
     upload_parser.add_argument(
         "--prefix",
-        default="blog/",
-        help="Prefix (folder) under which to upload the files in GCS (default: blog/).",
+        default=None,
+        help="Prefix (folder) under which to upload the files in GCS (default: blog/). Overrides config.",
     )
     upload_parser.add_argument(
         "--project",
         default=None,
-        help="The Google Cloud project ID (optional if implicitly configured).",
+        help="The Google Cloud project ID (optional if implicitly configured). Overrides config.",
     )
 
 
@@ -80,6 +83,14 @@ def _build_parser() -> ArgumentParser:
     parser.add_argument(
         "--root-dir", default=os.path.join(current_cwd, "root")
     )
+    parser.add_argument(
+        "--base-url", default=None,
+        help="Base URL for the sitemap. Overrides config.",
+    )
+    parser.add_argument(
+        "--config", default=os.path.join(current_cwd, "config.json"),
+        help="Path to a JSON config file."
+    )
     return parser
 
 
@@ -91,6 +102,7 @@ def main() -> None:
         "init": run_init,
         "compile": run_compile,
         "submit": run_submit,
+        "update": run_update,
         "upload": run_upload,
     }
     handler = command_handlers.get(str(args.command))

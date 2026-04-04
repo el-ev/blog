@@ -2,6 +2,7 @@ import os
 import re
 import hashlib
 import html
+import json
 from argparse import Namespace
 from typing import Dict, List, Any
 
@@ -103,5 +104,45 @@ def update_content(args: Namespace) -> None:
         extract_title_from_pdf=False,
         hidden_text_override=hidden_text,
     )
+    
+    config_data: Dict[str, Any] = {}
+    config_path: str = getattr(args, 'config', '')
+    if config_path and os.path.isfile(config_path):
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                config_data = json.load(f)
+        except Exception as e:
+            print(f"Failed to read config file '{config_path}': {e}")
+            
+    base_url_raw = getattr(args, 'base_url', None) or config_data.get("base_url")
+    base_url: str = str(base_url_raw) if base_url_raw else "https://owo.li/blog/"
+    base_url = base_url.rstrip("/")
+
+    # Generate Sitemap
+    sitemap_lines = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+    ]
+
+    # Add root index
+    sitemap_lines.append(f'  <url><loc>{base_url}/</loc></url>')
+
+    # Add all discovered posts
+    for date_str, day_posts in posts_by_date.items():
+        for post in day_posts:
+            # post["link"] is like "./posts/2026-04-04/test/index.html"
+            rel_link = post["link"].lstrip("./")
+            # If it ends with index.html, we can just link to the directory
+            rel_link_clean = rel_link
+            if rel_link_clean.endswith("index.html"):
+                rel_link_clean = rel_link_clean[:-10]
+            sitemap_lines.append(f'  <url><loc>{base_url}/{rel_link_clean}</loc></url>')
+
+    sitemap_lines.append("</urlset>")
+
+    sitemap_path = os.path.join(root_dir, "sitemap.xml")
+    with open(sitemap_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(sitemap_lines))
 
     print(f"Content page updated in {root_dir}.")
+    print(f"Sitemap generated at {sitemap_path}.")
