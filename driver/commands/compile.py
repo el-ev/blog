@@ -105,7 +105,8 @@ def run_compile(args: Namespace) -> None:
 
     posts_dir = os.path.join(args.root_dir, "posts")
 
-    last_revision_date, last_revision_url = find_latest_revision(posts_dir, workspace_name)
+    skip_latest = getattr(args, 'amend', False)
+    last_revision_date, last_revision_url = find_latest_revision(posts_dir, workspace_name, skip_latest=skip_latest)
 
     input_values_svg = {"with_driver": "true", "export_format": "svg"}
     input_values_pdf = {"with_driver": "true", "export_format": "pdf"}

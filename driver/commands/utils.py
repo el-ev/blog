@@ -266,7 +266,7 @@ def build_html_from_svgs(
     return index_path
 
 
-def find_latest_revision(posts_dir: str, workspace_name: str) -> Tuple[Optional[str], Optional[str]]:
+def find_latest_revision(posts_dir: str, workspace_name: str, skip_latest: bool = False) -> Tuple[Optional[str], Optional[str]]:
     if not os.path.exists(posts_dir):
         return None, None
 
@@ -288,8 +288,14 @@ def find_latest_revision(posts_dir: str, workspace_name: str) -> Tuple[Optional[
 
         if revs:
             revs.sort(key=lambda x: x[0], reverse=True)
-            last_dir_name = revs[0][1]
-            return date_str, f"../../{date_str}/{last_dir_name}/index.html"
+            if skip_latest and len(revs) > 1:
+                last_dir_name = revs[1][1]
+                return date_str, f"../../{date_str}/{last_dir_name}/index.html"
+            elif skip_latest and len(revs) <= 1:
+                continue
+            else:
+                last_dir_name = revs[0][1]
+                return date_str, f"../../{date_str}/{last_dir_name}/index.html"
 
     return None, None
 
