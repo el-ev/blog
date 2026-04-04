@@ -3,6 +3,7 @@ import sys
 import shutil
 import hashlib
 import html
+import re
 from datetime import datetime
 from argparse import Namespace
 from typing import List, Tuple
@@ -39,7 +40,7 @@ def _build_filelist_markup(file_entries: List[Tuple[str, bool]]) -> Tuple[List[s
             filelist_typst_lines.append(f"- [{rel_path}]")
             hidden_items.append(f"<li>{escaped_rel}</li>")
 
-    hidden_text = "<h1>Files</h1>\n<ul>\n" + "\n".join(hidden_items) + "\n</ul>"
+    hidden_text = "<ul>\n" + "\n".join(hidden_items) + "\n</ul>"
     return filelist_typst_lines, hidden_text
 
 
@@ -103,6 +104,13 @@ def run_submit(args: Namespace) -> None:
 
     with open(filelist_template_path, "r", encoding="utf-8") as f:
         filelist_template = f.read()
+
+    parsed_title = "Files"
+    title_match = re.search(r'#let\s+title\s*=\s*"([^"]+)"', filelist_template)
+    if title_match:
+        parsed_title = title_match.group(1)
+        
+    hidden_text = f"<h1>{html.escape(parsed_title)}</h1>\n" + hidden_text
 
     filelist_source = filelist_template.replace("{{FILES}}", "\n".join(filelist_typst_lines))
 

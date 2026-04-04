@@ -171,6 +171,7 @@ def patch_svg_file(
         )
 
     svg_data = svg_data.replace("<a ", '<a target="_top" ')
+    svg_data = re.sub(r'\sclass="[^"]+"', "", svg_data)
 
     with open(dst_path, "w", encoding="utf-8") as svg_file:
         svg_file.write(svg_data)
@@ -183,13 +184,15 @@ def patch_svg_file(
             print(f"SVGO failed for {dst_path}", file=sys.stderr)
             if e.stderr:
                 print(e.stderr.decode("utf-8"), file=sys.stderr)
-        w, h = float(match_vb.group(1)), float(match_vb.group(2))
-        aspect_ratio = f"{w} / {h}"
-        if match_w:
-            max_width_style = f"max-width: {match_w.group(1)}; width: 100%;"
     else:
         print("SVGO not found, skipping SVG optimization.", file=sys.stderr)
-            
+
+    if match_vb:
+        w, h = float(match_vb.group(1)), float(match_vb.group(2))
+        aspect_ratio = f"{w} / {h}"
+    if match_w:
+        max_width_style = f"max-width: {match_w.group(1)}; width: 100%;"
+
     return aspect_ratio, max_width_style
 
 

@@ -60,6 +60,15 @@ def update_content(args: Namespace) -> None:
     with open(content_template_path, "r", encoding="utf-8") as f:
         content_template = f.read()
 
+    parsed_title = "Blog"
+    parsed_subtitle = ""
+    title_match = re.search(r'#let\s+title\s*=\s*"([^"]+)"', content_template)
+    subtitle_match = re.search(r'#let\s+subtitle\s*=\s*"([^"]+)"', content_template)
+    if title_match:
+        parsed_title = title_match.group(1)
+    if subtitle_match:
+        parsed_subtitle = subtitle_match.group(1)
+
     posts_typst: List[str] = []
     for date_str, day_posts in posts_by_date.items():
         posts_typst.append(f"== {date_str}")
@@ -69,7 +78,12 @@ def update_content(args: Namespace) -> None:
 
     content_source = content_template.replace("{{POSTS}}", "\n".join(posts_typst))
 
-    hidden_sections: List[str] = ["<h1>Content</h1>"]
+    hidden_sections: List[str] = [
+        f'<h1>{html.escape(parsed_title)}</h1>'
+    ]
+    if parsed_subtitle:
+        hidden_sections.append(f'<p>{html.escape(parsed_subtitle)}</p>')
+    hidden_sections.append('<h1>Content</h1>')
     for date_str, day_posts in posts_by_date.items():
         hidden_sections.append(f"<h2>{html.escape(date_str)}</h2>")
         hidden_sections.append("<ul>")
@@ -118,21 +132,16 @@ def update_content(args: Namespace) -> None:
     base_url: str = str(base_url_raw) if base_url_raw else "https://owo.li/blog/"
     base_url = base_url.rstrip("/")
 
-    # Generate Sitemap
     sitemap_lines = [
         '<?xml version="1.0" encoding="UTF-8"?>',
         '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
     ]
 
-    # Add root index
     sitemap_lines.append(f'  <url><loc>{base_url}/</loc></url>')
 
-    # Add all discovered posts
     for date_str, day_posts in posts_by_date.items():
         for post in day_posts:
-            # post["link"] is like "./posts/2026-04-04/test/index.html"
             rel_link = post["link"].lstrip("./")
-            # If it ends with index.html, we can just link to the directory
             rel_link_clean = rel_link
             if rel_link_clean.endswith("index.html"):
                 rel_link_clean = rel_link_clean[:-10]

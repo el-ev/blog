@@ -12,13 +12,10 @@
   )
 }
 
-#let article(
-  title: "Article",
-  date: datetime.today().display(),
-  top_bar: none,
-  body,
-) = {
-  set document(title: title)
+#let base_layout(title: none, body) = {
+  if title != none {
+    set document(title: title)
+  }
   set page(
     paper: "iso-b5",
     margin: (x: 1cm, y: 1cm),
@@ -31,17 +28,31 @@
     ],
   )
   
-  set text(font: "Libertinus Serif", size: 12pt)
-  set par(justify: true, first-line-indent: 0pt)
+  set text(font: "Libertinus Serif", size: 14pt)
   show link: underline
+
+  body
+}
+
+#let article(
+  title: "Article",
+  date: datetime.today().display(),
+  top_bar: none,
+  body,
+) = {
+  show: base_layout.with(title: title)
+  
+  set par(justify: true, first-line-indent: 0pt)
 
   if top_bar != none {
     top_bar
   }
 
-  align(center)[#text(weight: "bold", size: 16pt)[#title]]
-  v(-0.4cm)
-  align(center)[#date]
+  align(center)[
+    #text(weight: "bold", size: 24pt)[#title]
+    #v(-0.4cm)
+    #text(size: 12pt, fill: luma(100))[#date]
+  ]
 
   body
 }
