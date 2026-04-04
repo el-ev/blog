@@ -1,0 +1,105 @@
+import os
+import sys
+import argparse
+from argparse import ArgumentParser, BooleanOptionalAction, Namespace
+
+from commands.init import run_init
+from commands.compile import run_compile
+from commands.submit import run_submit
+from commands.upload import run_upload
+
+
+def _add_command_parsers(subparsers: argparse._SubParsersAction) -> None:
+    init_parser = ArgumentParser(add_help=False)
+    init_parser.add_argument(
+        "name",
+        nargs=1,
+        help="Create a new post draft with the specified workspace name.",
+    )
+    subparsers.add_parser("init", parents=[init_parser], add_help=False)
+
+    compile_parser = ArgumentParser(add_help=False)
+    compile_parser.add_argument(
+        "name",
+        nargs=1,
+        help="Name of the workspace to be compiled.",
+    )
+    subparsers.add_parser("compile", parents=[compile_parser], add_help=False)
+
+    submit_parser = ArgumentParser(add_help=False)
+    submit_parser.add_argument(
+        "name", nargs=1, help="Name of the workspace to be submitted."
+    )
+    submit_parser.add_argument(
+        "--amend",
+        action=BooleanOptionalAction,
+        help="If set, the blog post will replace the latest revision instead of creating a new one.",
+        default=False,
+        dest="amend",
+    )
+    subparsers.add_parser("submit", parents=[submit_parser], add_help=False)
+
+    upload_parser = subparsers.add_parser(
+        "upload", help="Upload the generated root directory to Google Cloud Storage"
+    )
+    upload_parser.add_argument(
+        "--bucket", required=True, help="Name of the GCS bucket to upload the content to."
+    )
+    upload_parser.add_argument(
+        "--prefix",
+        default="blog/",
+        help="Prefix (folder) under which to upload the files in GCS (default: blog/).",
+    )
+    upload_parser.add_argument(
+        "--project",
+        default=None,
+        help="The Google Cloud project ID (optional if implicitly configured).",
+    )
+
+
+def _build_parser() -> ArgumentParser:
+    parser = ArgumentParser(
+        prog="Blog Driver",
+        description="Driver for building blog posts from Typst sources.",
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    _add_command_parsers(subparsers)
+
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    current_cwd = os.getcwd()
+
+    parser.add_argument(
+        "--template-dir", default=os.path.join(base_dir, "template")
+    )
+    parser.add_argument(
+        "--workspace-base", default=os.path.join(current_cwd, "workspace")
+    )
+    parser.add_argument(
+        "--build-base", default=os.path.join(current_cwd, "build")
+    )
+    parser.add_argument(
+        "--root-dir", default=os.path.join(current_cwd, "root")
+    )
+    return parser
+
+
+def main() -> None:
+    parser = _build_parser()
+    args: Namespace = parser.parse_args()
+
+    command_handlers = {
+        "init": run_init,
+        "compile": run_compile,
+        "submit": run_submit,
+        "upload": run_upload,
+    }
+    handler = command_handlers.get(str(args.command))
+    if handler is None:
+        print(f"Unknown command: {args.command}", file=sys.stderr)
+        sys.exit(1)
+        
+    handler(args)
+
+
+if __name__ == "__main__":
+    main()
