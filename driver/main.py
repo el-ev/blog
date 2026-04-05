@@ -8,6 +8,7 @@ from commands.compile import run_compile
 from commands.submit import run_submit
 from commands.update import update_content as run_update
 from commands.upload import run_upload
+from commands.recover import run_recover
 
 
 def _add_command_parsers(subparsers: argparse._SubParsersAction) -> None:
@@ -39,6 +40,22 @@ def _add_command_parsers(subparsers: argparse._SubParsersAction) -> None:
         dest="amend",
     )
     subparsers.add_parser("submit", parents=[submit_parser], add_help=False)
+
+    recover_parser = ArgumentParser(add_help=False)
+    recover_parser.add_argument(
+        "name",
+        nargs=1,
+        help="Name of the workspace to recover from the latest post source snapshot.",
+    )
+    recover_parser.add_argument(
+        "--force",
+        action=BooleanOptionalAction,
+        default=False,
+        help="If set, remove an existing local workspace before recovery.",
+        dest="force",
+    )
+    subparsers.add_parser("recover", parents=[recover_parser], add_help=False)
+
     update_parser = subparsers.add_parser(
         "update", help="Update the auxiliary files like the content list and sitemap."
     )
@@ -102,6 +119,7 @@ def main() -> None:
         "init": run_init,
         "compile": run_compile,
         "submit": run_submit,
+        "recover": run_recover,
         "update": run_update,
         "upload": run_upload,
     }

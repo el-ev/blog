@@ -9,6 +9,7 @@ from typing import Optional, List, Tuple, Dict, Set
 
 
 _typst_path: Optional[str] = None
+_WORKSPACE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 
 def reset_directory(path: str) -> None:
@@ -16,6 +17,29 @@ def reset_directory(path: str) -> None:
     if os.listdir(path):
         shutil.rmtree(path)
         os.makedirs(path, exist_ok=True)
+
+
+def validate_workspace_name(name: str) -> str:
+    normalized = name.strip()
+    if not normalized:
+        raise ValueError("Workspace name must not be empty.")
+    if normalized in {".", ".."}:
+        raise ValueError("Workspace name cannot be '.' or '..'.")
+    if "/" in normalized or "\\" in normalized:
+        raise ValueError("Workspace name must not contain path separators.")
+    if not _WORKSPACE_NAME_PATTERN.fullmatch(normalized):
+        raise ValueError(
+            "Workspace name may only contain letters, numbers, dots, underscores, and hyphens."
+        )
+    return normalized
+
+
+def safe_join_child(base_dir: str, child_name: str) -> str:
+    base_abs = os.path.abspath(base_dir)
+    child_abs = os.path.abspath(os.path.join(base_abs, child_name))
+    if os.path.commonpath([base_abs, child_abs]) != base_abs:
+        raise ValueError(f"Resolved path escapes base directory: {base_dir}")
+    return child_abs
 
 
 def run_typst_compile(
@@ -131,8 +155,13 @@ def extract_pdf_links(pdf_path: str) -> List[Tuple[str, str]]:
     return links
 
 
-def _is_generated_page_svg(filename: str) -> bool:
-    return bool(re.match(r"^page\d+(?:\.[^.]+)?\.svg$", filename))
+def _is_generated_svg(filename: str, svg_name_prefix: str = "page") -> bool:
+    return bool(
+        re.match(
+            rf"^{re.escape(svg_name_prefix)}\d+(?:\.[^.]+)?\.svg$",
+            filename,
+        )
+    )
 
 
 def patch_svg_file(
@@ -210,6 +239,8 @@ def build_html_from_svgs(
     hidden_text_override: Optional[str] = None,
     top_bar_html: str = "",
     revision_html: str = "",
+    svg_name_prefix: str = "page",
+    html_filename: str = "index.html",
 ) -> str:
     with open(template_path, "r", encoding="utf-8") as f:
         template = f.read()
@@ -218,13 +249,15 @@ def build_html_from_svgs(
 
     os.makedirs(dest_dir, exist_ok=True)
 
-    svg_files = sorted(f for f in os.listdir(output_dir) if f.endswith(".svg"))
+    svg_files = sorted(
+        f for f in os.listdir(output_dir) if _is_generated_svg(f, svg_name_prefix)
+    )
     if page_count:
         svg_files = svg_files[:page_count]
 
     current_svg_set = set(svg_files)
     for filename in os.listdir(dest_dir):
-        if _is_generated_page_svg(filename) and filename not in current_svg_set:
+        if _is_generated_svg(filename, svg_name_prefix) and filename not in current_svg_set:
             os.remove(os.path.join(dest_dir, filename))
 
     for i, filename in enumerate(svg_files, start=1):
@@ -262,7 +295,7 @@ def build_html_from_svgs(
     index_content = index_content.replace("{{TOPBAR}}", top_bar_html)
     index_content = index_content.replace("{{REVISION}}", revision_html)
 
-    index_path = os.path.join(dest_dir, "index.html")
+    index_path = os.path.join(dest_dir, html_filename)
     with open(index_path, "w", encoding="utf-8") as f:
         f.write(index_content)
 
@@ -318,8 +351,10 @@ def compile_and_build_html(
     extract_title_from_pdf: bool = False,
     hidden_text_override: Optional[str] = None,
     svg_href_rewrites: Optional[Dict[str, str]] = None,
+    svg_name_prefix: str = "page",
+    html_filename: str = "index.html",
 ) -> str:
-    svg_prefix = f"page{{0p}}.{asset_hash}.svg"
+    svg_prefix = f"{svg_name_prefix}{{0p}}.{asset_hash}.svg"
     pdf_name = f"{file_prefix}.{asset_hash}.pdf"
     
     run_typst_compile(
@@ -337,7 +372,9 @@ def compile_and_build_html(
         inputs=inputs_pdf,
     )
     
-    page_count = len([f for f in os.listdir(output_dir) if f.endswith(".svg")])
+    page_count = len(
+        [f for f in os.listdir(output_dir) if _is_generated_svg(f, svg_name_prefix)]
+    )
     
     return build_html_from_svgs(
         template_path=template_path,
@@ -351,4 +388,6 @@ def compile_and_build_html(
         default_title=default_title,
         description=description,
         hidden_text_override=hidden_text_override,
+        svg_name_prefix=svg_name_prefix,
+        html_filename=html_filename,
     )

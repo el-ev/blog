@@ -9,7 +9,7 @@
     [
       #set text(size: 10pt, fill: luma(100))
       #align(right)[
-        #link("../../../index.html")[Contents] | #link("post.pdf")[PDF] | #link("source/index.html")[Source]
+        #link("../../../index.html")[Contents] | #link("post.pdf")[PDF] | #link("source/index.html")[Source] | #link("meta.html")[Meta]
       ]
     ],
   )

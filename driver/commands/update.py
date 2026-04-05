@@ -4,7 +4,7 @@ import hashlib
 import html
 import json
 from argparse import Namespace
-from typing import Dict, List, Any
+from typing import Any, Dict, List, Tuple
 
 from .utils import (
     reset_directory,
@@ -12,87 +12,169 @@ from .utils import (
 )
 
 
+PostEntry = Dict[str, Any]
+PostsByDate = Dict[str, List[PostEntry]]
+
+_TITLE_PATTERN = re.compile(r'#let\s+title\s*=\s*"([^"]+)"')
+_SUBTITLE_PATTERN = re.compile(r'#let\s+subtitle\s*=\s*"([^"]+)"')
+_REVISION_SUFFIX_PATTERN = re.compile(r"-(\d+)$")
+
+
+def _extract_post_title(main_typ_path: str, fallback: str) -> str:
+    if not os.path.exists(main_typ_path):
+        return fallback
+
+    try:
+        with open(main_typ_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        match = _TITLE_PATTERN.search(content)
+        if match:
+            return match.group(1)
+    except Exception:
+        pass
+    return fallback
+
+
+def _append_revision_suffix(post_dir_name: str, title: str) -> str:
+    rev_match = _REVISION_SUFFIX_PATTERN.search(post_dir_name)
+    if not rev_match:
+        return title
+    return f"{title} Rev {rev_match.group(1)}"
+
+
+def _collect_day_posts(date_dir: str, date_str: str) -> List[PostEntry]:
+    day_posts: List[PostEntry] = []
+    for post_dir_name in os.listdir(date_dir):
+        post_path = os.path.join(date_dir, post_dir_name)
+        if not os.path.isdir(post_path):
+            continue
+
+        title = _extract_post_title(
+            os.path.join(post_path, "source", "main.typ"),
+            fallback=post_dir_name,
+        )
+        title = _append_revision_suffix(post_dir_name, title)
+
+        day_posts.append(
+            {
+                "name": title,
+                "link": f"./posts/{date_str}/{post_dir_name}/index.html",
+                "time": os.path.getmtime(post_path),
+            }
+        )
+    day_posts.sort(key=lambda post: post["time"], reverse=True)
+    return day_posts
+
+
+def _collect_posts_by_date(posts_dir: str) -> PostsByDate:
+    posts_by_date: PostsByDate = {}
+    for date_str in sorted(os.listdir(posts_dir), reverse=True):
+        date_dir = os.path.join(posts_dir, date_str)
+        if not os.path.isdir(date_dir):
+            continue
+        day_posts = _collect_day_posts(date_dir, date_str)
+        if day_posts:
+            posts_by_date[date_str] = day_posts
+    return posts_by_date
+
+
+def _extract_template_headers(content_template: str) -> Tuple[str, str]:
+    parsed_title = "Blog"
+    parsed_subtitle = ""
+    title_match = _TITLE_PATTERN.search(content_template)
+    subtitle_match = _SUBTITLE_PATTERN.search(content_template)
+    if title_match:
+        parsed_title = title_match.group(1)
+    if subtitle_match:
+        parsed_subtitle = subtitle_match.group(1)
+    return parsed_title, parsed_subtitle
+
+
+def _build_posts_typst(posts_by_date: PostsByDate) -> str:
+    lines: List[str] = []
+    for date_str, day_posts in posts_by_date.items():
+        lines.append(f"== {date_str}")
+        for post in day_posts:
+            lines.append(f'- #link("{post["link"]}")[{post["name"]}]')
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _build_hidden_text(
+    parsed_title: str,
+    parsed_subtitle: str,
+    posts_by_date: PostsByDate,
+) -> str:
+    sections: List[str] = [f"<h1>{html.escape(parsed_title)}</h1>"]
+    if parsed_subtitle:
+        sections.append(f"<p>{html.escape(parsed_subtitle)}</p>")
+    sections.append("<h1>Content</h1>")
+
+    for date_str, day_posts in posts_by_date.items():
+        sections.append(f"<h2>{html.escape(date_str)}</h2>")
+        sections.append("<ul>")
+        for post in day_posts:
+            href = html.escape(post["link"])
+            label = html.escape(post["name"])
+            sections.append(f'<li><a href="{href}">{label}</a></li>')
+        sections.append("</ul>")
+    return "\n".join(sections)
+
+
+def _load_config_data(config_path: str) -> Dict[str, Any]:
+    if not config_path or not os.path.isfile(config_path):
+        return {}
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"Failed to read config file '{config_path}': {e}")
+        return {}
+
+
+def _resolve_base_url(args: Namespace, config_data: Dict[str, Any]) -> str:
+    base_url_raw = getattr(args, "base_url", None) or config_data.get("base_url")
+    base_url = str(base_url_raw) if base_url_raw else "https://owo.li/blog/"
+    return base_url.rstrip("/")
+
+
+def _build_sitemap_lines(base_url: str, posts_by_date: PostsByDate) -> List[str]:
+    sitemap_lines = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
+        f'  <url><loc>{html.escape(base_url + "/", quote=False)}</loc></url>',
+    ]
+
+    for day_posts in posts_by_date.values():
+        for post in day_posts:
+            rel_link = post["link"].lstrip("./")
+            rel_link_clean = rel_link
+            if rel_link_clean.endswith("index.html"):
+                rel_link_clean = rel_link_clean[:-10]
+            sitemap_lines.append(
+                f'  <url><loc>{html.escape(base_url + "/" + rel_link_clean, quote=False)}</loc></url>'
+            )
+
+    sitemap_lines.append("</urlset>")
+    return sitemap_lines
+
+
 def update_content(args: Namespace) -> None:
     dest_base_dir = os.path.join(args.root_dir, "posts")
     if not os.path.exists(dest_base_dir):
         return
 
-    posts_by_date: Dict[str, List[Dict[str, Any]]] = {}
-    for date_str in sorted(os.listdir(dest_base_dir), reverse=True):
-        date_dir = os.path.join(dest_base_dir, date_str)
-        if not os.path.isdir(date_dir):
-            continue
-
-        day_posts: List[Dict[str, Any]] = []
-        for post_dir_name in os.listdir(date_dir):
-            post_path = os.path.join(date_dir, post_dir_name)
-            if not os.path.isdir(post_path):
-                continue
-
-            title = post_dir_name
-            main_typ_path = os.path.join(post_path, "source", "main.typ")
-            if os.path.exists(main_typ_path):
-                try:
-                    with open(main_typ_path, "r", encoding="utf-8") as f:
-                        match = re.search(r'#let\s+title\s*=\s*"([^"]+)"', f.read())
-                        if match:
-                            title = match.group(1)
-                except Exception:
-                    pass
-
-            rev_match = re.search(r'-(\d+)$', post_dir_name)
-            if rev_match:
-                title += f" Rev {rev_match.group(1)}"
-
-            day_posts.append({
-                "name": title,
-                "link": f"./posts/{date_str}/{post_dir_name}/index.html",
-                "time": os.path.getmtime(post_path)
-            })
-
-        day_posts.sort(key=lambda x: x["time"], reverse=True)
-        if day_posts:
-            posts_by_date[date_str] = day_posts
+    posts_by_date = _collect_posts_by_date(dest_base_dir)
 
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     content_template_path = os.path.join(base_dir, "content.template.typ")
-    
+
     with open(content_template_path, "r", encoding="utf-8") as f:
         content_template = f.read()
 
-    parsed_title = "Blog"
-    parsed_subtitle = ""
-    title_match = re.search(r'#let\s+title\s*=\s*"([^"]+)"', content_template)
-    subtitle_match = re.search(r'#let\s+subtitle\s*=\s*"([^"]+)"', content_template)
-    if title_match:
-        parsed_title = title_match.group(1)
-    if subtitle_match:
-        parsed_subtitle = subtitle_match.group(1)
-
-    posts_typst: List[str] = []
-    for date_str, day_posts in posts_by_date.items():
-        posts_typst.append(f"== {date_str}")
-        for p in day_posts:
-            posts_typst.append(f'- #link("{p["link"]}")[{p["name"]}]')
-        posts_typst.append("")
-
-    content_source = content_template.replace("{{POSTS}}", "\n".join(posts_typst))
-
-    hidden_sections: List[str] = [
-        f'<h1>{html.escape(parsed_title)}</h1>'
-    ]
-    if parsed_subtitle:
-        hidden_sections.append(f'<p>{html.escape(parsed_subtitle)}</p>')
-    hidden_sections.append('<h1>Content</h1>')
-    for date_str, day_posts in posts_by_date.items():
-        hidden_sections.append(f"<h2>{html.escape(date_str)}</h2>")
-        hidden_sections.append("<ul>")
-        for post in day_posts:
-            href = html.escape(post["link"])
-            label = html.escape(post["name"])
-            hidden_sections.append(f'<li><a href="{href}">{label}</a></li>')
-        hidden_sections.append("</ul>")
-    hidden_text = "\n".join(hidden_sections)
+    parsed_title, parsed_subtitle = _extract_template_headers(content_template)
+    content_source = content_template.replace("{{POSTS}}", _build_posts_typst(posts_by_date))
+    hidden_text = _build_hidden_text(parsed_title, parsed_subtitle, posts_by_date)
 
     build_base: str = args.build_base
     output_dir = os.path.join(build_base, "content")
@@ -119,36 +201,11 @@ def update_content(args: Namespace) -> None:
         extract_title_from_pdf=False,
         hidden_text_override=hidden_text,
     )
-    
-    config_data: Dict[str, Any] = {}
-    config_path: str = getattr(args, 'config', '')
-    if config_path and os.path.isfile(config_path):
-        try:
-            with open(config_path, "r", encoding="utf-8") as f:
-                config_data = json.load(f)
-        except Exception as e:
-            print(f"Failed to read config file '{config_path}': {e}")
-            
-    base_url_raw = getattr(args, 'base_url', None) or config_data.get("base_url")
-    base_url: str = str(base_url_raw) if base_url_raw else "https://owo.li/blog/"
-    base_url = base_url.rstrip("/")
 
-    sitemap_lines = [
-        '<?xml version="1.0" encoding="UTF-8"?>',
-        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
-    ]
-
-    sitemap_lines.append(f'  <url><loc>{base_url}/</loc></url>')
-
-    for date_str, day_posts in posts_by_date.items():
-        for post in day_posts:
-            rel_link = post["link"].lstrip("./")
-            rel_link_clean = rel_link
-            if rel_link_clean.endswith("index.html"):
-                rel_link_clean = rel_link_clean[:-10]
-            sitemap_lines.append(f'  <url><loc>{base_url}/{rel_link_clean}</loc></url>')
-
-    sitemap_lines.append("</urlset>")
+    config_path: str = getattr(args, "config", "")
+    config_data = _load_config_data(config_path)
+    base_url = _resolve_base_url(args, config_data)
+    sitemap_lines = _build_sitemap_lines(base_url, posts_by_date)
 
     sitemap_path = os.path.join(root_dir, "sitemap.xml")
     with open(sitemap_path, "w", encoding="utf-8") as f:
