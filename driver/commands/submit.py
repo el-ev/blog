@@ -1,41 +1,78 @@
 import os
 import sys
 import shutil
-import hashlib
 import html
 import json
 import re
+import tempfile
 from datetime import datetime
 from argparse import Namespace
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .compile import run_compile
 from .update import update_content
 from .utils import (
+    build_raw_copy_assets,
     reset_directory,
     compile_and_build_html,
+    extract_typst_raws_from_content,
+    hash_text_with_sources,
     validate_workspace_name,
     safe_join_child,
+    rewrite_clipboard_script_src,
 )
 
 
-def _collect_source_entries(source_dest_dir: str) -> List[Tuple[str, bool]]:
-    file_entries: List[Tuple[str, bool]] = []
-    linkable_exts = (".typ", ".txt", ".md", ".py", ".json")
-    for root, _, files in os.walk(source_dest_dir):
-        for file in files:
-            abs_path = os.path.join(root, file)
-            rel_path = os.path.relpath(abs_path, start=source_dest_dir).replace("\\", "/")
-            file_entries.append((rel_path, file.endswith(linkable_exts)))
-    file_entries.sort(key=lambda x: x[0])
-    return file_entries
+_META_CODE_FIELD_PATTERN = re.compile(
+    r"<li>\s*([^:<]+):\s*<code>(.*?)</code>\s*</li>",
+    re.IGNORECASE | re.DOTALL,
+)
+_GENERATED_SOURCE_BUNDLE_FILES = {
+    ".workspace-manifest.json",
+    "index.html",
+}
 
 
-def _build_filelist_markup(file_entries: List[Tuple[str, bool]]) -> Tuple[List[str], str]:
+def _normalize_relative_paths(paths: List[str]) -> List[str]:
+    normalized_paths: List[str] = []
+    seen: Set[str] = set()
+    for raw_path in paths:
+        normalized = str(raw_path).replace("\\", "/").strip()
+        if not normalized or normalized == ".":
+            continue
+        if normalized.startswith("/") or normalized.startswith("../") or "/../" in normalized:
+            continue
+        if normalized.startswith("./"):
+            normalized = normalized[2:]
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        normalized_paths.append(normalized)
+    normalized_paths.sort()
+    return normalized_paths
+
+
+def _manifest_source_files(source_dir: str) -> List[str]:
+    manifest_data = _load_manifest_data(source_dir)
+    raw_files = manifest_data.get("files")
+    if not isinstance(raw_files, list):
+        return []
+    normalized_files = _normalize_relative_paths(
+        [path for path in raw_files if isinstance(path, str)]
+    )
+    return [
+        path for path in normalized_files
+        if path not in _GENERATED_SOURCE_BUNDLE_FILES
+    ]
+
+
+def _build_filelist_markup(file_paths: List[str]) -> Tuple[List[str], str]:
     filelist_typst_lines: List[str] = []
     hidden_items: List[str] = []
-    for rel_path, is_linkable in file_entries:
+    linkable_exts = (".typ", ".txt", ".md", ".py", ".json")
+    for rel_path in file_paths:
         escaped_rel = html.escape(rel_path)
+        is_linkable = rel_path.endswith(linkable_exts)
         if is_linkable:
             filelist_typst_lines.append(f'- #link("{rel_path}")[{rel_path}]')
             hidden_items.append(f'<li><a href="{escaped_rel}">{escaped_rel}</a></li>')
@@ -54,8 +91,7 @@ def _collect_relative_files(base_dir: str) -> List[str]:
             abs_path = os.path.join(root, filename)
             rel_path = os.path.relpath(abs_path, start=base_dir).replace("\\", "/")
             file_paths.append(rel_path)
-    file_paths.sort()
-    return file_paths
+    return _normalize_relative_paths(file_paths)
 
 
 def _extract_declared_title(main_typ_path: str, fallback: str) -> str:
@@ -118,6 +154,76 @@ def _find_latest_revision_entry(posts_dir: str, workspace_name: str) -> Tuple[st
     raise FileNotFoundError(f"No revisions found for workspace '{workspace_name}'.")
 
 
+def _load_manifest_data(source_dir: str) -> Dict[str, Any]:
+    manifest_path = os.path.join(source_dir, ".workspace-manifest.json")
+    if not os.path.isfile(manifest_path):
+        return {}
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _load_meta_fields(post_dir: str) -> Dict[str, str]:
+    meta_path = os.path.join(post_dir, "meta.html")
+    if not os.path.isfile(meta_path):
+        return {}
+    try:
+        with open(meta_path, "r", encoding="utf-8") as f:
+            meta_html = f.read()
+    except Exception:
+        return {}
+
+    fields: Dict[str, str] = {}
+    for key, value in _META_CODE_FIELD_PATTERN.findall(meta_html):
+        fields[key.strip()] = html.unescape(value.strip())
+    return fields
+
+
+def _base_workspace_name_from_dir(entry_name: str) -> str:
+    match = re.match(r"^(.*)-(\d+)$", entry_name)
+    if match:
+        return match.group(1)
+    return entry_name
+
+
+def _resolve_existing_post_metadata(
+    post_dir: str,
+    date_str: str,
+    entry_name: str,
+) -> Tuple[str, str, int]:
+    source_dir = os.path.join(post_dir, "source")
+    manifest_data = _load_manifest_data(source_dir)
+    meta_fields = _load_meta_fields(post_dir)
+
+    workspace_name_raw = (
+        manifest_data.get("workspace")
+        or meta_fields.get("Workspace Name")
+        or _base_workspace_name_from_dir(entry_name)
+    )
+    workspace_name = validate_workspace_name(str(workspace_name_raw))
+
+    publish_date_raw = (
+        manifest_data.get("publish_date")
+        or meta_fields.get("Publish Date")
+        or date_str
+    )
+    publish_date = str(publish_date_raw)
+
+    revision_raw = manifest_data.get("revision") or meta_fields.get("Revision")
+    if revision_raw is not None:
+        try:
+            revision = int(revision_raw)
+        except (TypeError, ValueError):
+            revision = _parse_workspace_revision(entry_name, workspace_name)
+    else:
+        revision = _parse_workspace_revision(entry_name, workspace_name)
+
+    return workspace_name, publish_date, revision
+
+
 def _write_workspace_manifest(
     manifest_path: str,
     workspace_name: str,
@@ -141,6 +247,10 @@ def _escape_typst_string(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
+def _inline_code_typst(value: str) -> str:
+    return f'#raw("{_escape_typst_string(value)}", block: false)'
+
+
 def _build_meta_typst_source(
     template_source: str,
     meta_fields: Dict[str, str],
@@ -148,7 +258,7 @@ def _build_meta_typst_source(
 ) -> str:
     field_lines: List[str] = []
     for key, value in meta_fields.items():
-        field_lines.append(f'- *{key}:* {_escape_typst_string(value)}')
+        field_lines.append(f'- *{key}:* {_inline_code_typst(value)}')
 
     source_lines: List[str] = []
     for rel_path in source_files:
@@ -166,13 +276,15 @@ def _build_meta_typst_source(
 def _build_meta_hidden_text(meta_fields: Dict[str, str], source_files: List[str]) -> str:
     lines: List[str] = ["<h1>Meta</h1>", "<ul>"]
     for key, value in meta_fields.items():
-        lines.append(f"<li>{html.escape(key)}: {html.escape(value)}</li>")
+        lines.append(f"<li>{html.escape(key)}: <code>{html.escape(value)}</code></li>")
     lines.append("</ul>")
     lines.append("<h2>Source Files</h2>")
     lines.append("<ul>")
     for rel_path in source_files:
         safe_path = html.escape(rel_path.replace("\\", "/"))
-        lines.append(f'<li><a href="source/{safe_path}">source/{safe_path}</a></li>')
+        lines.append(
+            f'<li><a href="source/{safe_path}">source/{safe_path}</a></li>'
+        )
     if not source_files:
         lines.append("<li>No files recorded.</li>")
     lines.append("</ul>")
@@ -232,6 +344,57 @@ def _resolve_submission_destination(
     return date_str, dest_dir_name, target_rev, False
 
 
+def _build_compile_args(
+    args: Namespace,
+    workspace_name: str,
+    workspace_path: str,
+    publish_date: str,
+    amend_mode: bool,
+) -> Namespace:
+    compile_args = Namespace(**vars(args))
+    compile_args.name = [workspace_name]
+    compile_args.amend = amend_mode
+    compile_args.workspace_path_override = workspace_path
+    compile_args.publish_date_override = publish_date
+    return compile_args
+
+
+def _stage_workspace_if_needed(workspace_path: str, dest_dir: str) -> Tuple[str, Optional[str]]:
+    manifest_files = _manifest_source_files(workspace_path)
+    if manifest_files:
+        temp_root = tempfile.mkdtemp(prefix=".amend-workspace-", dir=os.getcwd())
+        staged_path = os.path.join(temp_root, os.path.basename(os.path.abspath(workspace_path)))
+        os.makedirs(staged_path, exist_ok=True)
+
+        copied_any = False
+        for rel_path in manifest_files:
+            src_path = safe_join_child(workspace_path, rel_path)
+            if not os.path.isfile(src_path):
+                continue
+            dst_path = safe_join_child(staged_path, rel_path)
+            os.makedirs(os.path.dirname(dst_path), exist_ok=True)
+            shutil.copy2(src_path, dst_path)
+            copied_any = True
+
+        if copied_any:
+            return staged_path, temp_root
+
+        shutil.rmtree(temp_root, ignore_errors=True)
+
+    workspace_abs = os.path.abspath(workspace_path)
+    dest_abs = os.path.abspath(dest_dir)
+    try:
+        if os.path.commonpath([workspace_abs, dest_abs]) != dest_abs:
+            return workspace_path, None
+    except ValueError:
+        return workspace_path, None
+
+    temp_root = tempfile.mkdtemp(prefix=".amend-workspace-", dir=os.getcwd())
+    staged_path = os.path.join(temp_root, os.path.basename(workspace_abs))
+    shutil.copytree(workspace_abs, staged_path)
+    return staged_path, temp_root
+
+
 def _prepare_submission_tree(
     source_dir: str,
     workspace_path: str,
@@ -249,10 +412,11 @@ def _prepare_submission_tree(
 def _compile_filelist_page(
     build_base: str,
     base_dir: str,
+    root_dir: str,
     source_dest_dir: str,
+    workspace_files: List[str],
 ) -> None:
-    file_entries = _collect_source_entries(source_dest_dir)
-    filelist_typst_lines, hidden_text = _build_filelist_markup(file_entries)
+    filelist_typst_lines, hidden_text = _build_filelist_markup(workspace_files)
 
     filelist_template_path = os.path.join(base_dir, "filelist.template.typ")
     with open(filelist_template_path, "r", encoding="utf-8") as f:
@@ -269,7 +433,11 @@ def _compile_filelist_page(
     filelist_output_dir = os.path.join(build_base, "filelist")
     reset_directory(filelist_output_dir)
 
-    filelist_hash = hashlib.sha256(filelist_source.encode("utf-8")).hexdigest()[:6]
+    template_typ_path = os.path.join(base_dir, "template.typ")
+    filelist_hash = hash_text_with_sources(
+        filelist_source,
+        [template_typ_path],
+    )
     template_path = os.path.join(base_dir, "index.template.html")
     index_path = compile_and_build_html(
         source_bytes=filelist_source.encode(),
@@ -283,6 +451,7 @@ def _compile_filelist_page(
         description=parsed_title,
         extract_title_from_pdf=False,
         hidden_text_override=hidden_text,
+        clipboard_asset_path=os.path.join(root_dir, "clipboard.min.js"),
     )
     shutil.copy2(index_path, os.path.join(filelist_output_dir, "index.html"))
 
@@ -300,10 +469,10 @@ def _build_meta_fields(
     generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return {
         "Post Title": post_title,
-        "Workspace": workspace_name,
+        "Workspace Name": workspace_name,
         "Publish Date": date_str,
         "Revision": str(target_rev),
-        "Post Directory": f"{date_str}/{dest_dir_name}",
+        "Post Path": f"{date_str}/{dest_dir_name}",
         "PDF Asset": pdf_name,
         "Source Hash": post_source_hash,
         "Generated At": generated_at,
@@ -314,6 +483,7 @@ def _build_meta_fields(
 def _compile_meta_page(
     build_base: str,
     base_dir: str,
+    root_dir: str,
     dest_dir: str,
     post_title: str,
     meta_fields: Dict[str, str],
@@ -329,7 +499,19 @@ def _compile_meta_page(
         source_files=workspace_files,
     )
     meta_hidden_text = _build_meta_hidden_text(meta_fields, workspace_files)
-    meta_hash = hashlib.sha256(meta_source.encode("utf-8")).hexdigest()[:6]
+    template_typ_path = os.path.join(base_dir, "template.typ")
+    meta_hash = hash_text_with_sources(
+        meta_source,
+        [template_typ_path],
+    )
+    input_values_svg: Dict[str, str] = {"with_driver": "true", "export_format": "svg"}
+    input_values_pdf: Dict[str, str] = {"with_driver": "true", "export_format": "pdf"}
+    meta_raws = extract_typst_raws_from_content(
+        meta_source,
+        query_root=os.getcwd(),
+        inputs=input_values_svg,
+    )
+    raw_copy_html = build_raw_copy_assets(meta_raws)
 
     meta_output_dir = os.path.join(build_base, "meta")
     reset_directory(meta_output_dir)
@@ -343,25 +525,132 @@ def _compile_meta_page(
         title_format="Meta Page {i}",
         default_title=f"{post_title} - Meta",
         description=f"Metadata for {post_title}",
+        inputs_svg=input_values_svg,
+        inputs_pdf=input_values_pdf,
         extract_title_from_pdf=False,
         hidden_text_override=meta_hidden_text,
+        raw_copy_html=raw_copy_html,
         svg_name_prefix="meta-page",
         html_filename="meta.html",
+        clipboard_asset_path=os.path.join(root_dir, "clipboard.min.js"),
     )
+
+
+def _submit_to_destination(
+    args: Namespace,
+    workspace_name: str,
+    workspace_path: str,
+    date_str: str,
+    dest_dir_name: str,
+    target_rev: int,
+    amend_mode: bool,
+) -> None:
+    posts_dir = os.path.join(args.root_dir, "posts")
+    dest_base_dir = os.path.join(posts_dir, date_str)
+    os.makedirs(dest_base_dir, exist_ok=True)
+    dest_dir = os.path.join(dest_base_dir, dest_dir_name)
+
+    staged_workspace_path, temp_root = _stage_workspace_if_needed(workspace_path, dest_dir)
+    try:
+        run_compile(
+            _build_compile_args(
+                args=args,
+                workspace_name=workspace_name,
+                workspace_path=staged_workspace_path,
+                publish_date=date_str,
+                amend_mode=amend_mode,
+            )
+        )
+
+        source_dir = safe_join_child(args.build_base, workspace_name)
+        if not os.path.exists(source_dir):
+            print(f"Build directory '{source_dir}' does not exist.", file=sys.stderr)
+            sys.exit(1)
+
+        workspace_files = _collect_relative_files(staged_workspace_path)
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        source_dest_dir = _prepare_submission_tree(
+            source_dir=source_dir,
+            workspace_path=staged_workspace_path,
+            dest_dir=dest_dir,
+        )
+        _compile_filelist_page(
+            build_base=args.build_base,
+            base_dir=base_dir,
+            root_dir=args.root_dir,
+            source_dest_dir=source_dest_dir,
+            workspace_files=workspace_files,
+        )
+
+        post_title = _extract_declared_title(
+            os.path.join(staged_workspace_path, "main.typ"),
+            workspace_name,
+        )
+        pdf_name, post_asset_hash = _extract_post_pdf_name(dest_dir)
+        meta_fields = _build_meta_fields(
+            workspace_name=workspace_name,
+            date_str=date_str,
+            target_rev=target_rev,
+            dest_dir_name=dest_dir_name,
+            post_title=post_title,
+            pdf_name=pdf_name,
+            post_source_hash=post_asset_hash,
+            workspace_files=workspace_files,
+        )
+        _compile_meta_page(
+            build_base=args.build_base,
+            base_dir=base_dir,
+            root_dir=args.root_dir,
+            dest_dir=dest_dir,
+            post_title=post_title,
+            meta_fields=meta_fields,
+            workspace_files=workspace_files,
+        )
+        rewrite_clipboard_script_src(
+            os.path.join(dest_dir, "index.html"),
+            os.path.join(args.root_dir, "clipboard.min.js"),
+        )
+        _write_workspace_manifest(
+            manifest_path=os.path.join(source_dest_dir, ".workspace-manifest.json"),
+            workspace_name=workspace_name,
+            publish_date=date_str,
+            revision_name=dest_dir_name,
+            files=workspace_files,
+        )
+    finally:
+        if temp_root is not None:
+            shutil.rmtree(temp_root, ignore_errors=True)
+
+
+def _collect_published_workspaces(posts_dir: str) -> List[str]:
+    workspaces: Set[str] = set()
+    if not os.path.isdir(posts_dir):
+        return []
+
+    for date_str in os.listdir(posts_dir):
+        date_dir = os.path.join(posts_dir, date_str)
+        if not os.path.isdir(date_dir):
+            continue
+        for entry_name in os.listdir(date_dir):
+            post_dir = os.path.join(date_dir, entry_name)
+            if not os.path.isdir(post_dir):
+                continue
+            try:
+                workspace_name, _, _ = _resolve_existing_post_metadata(
+                    post_dir=post_dir,
+                    date_str=date_str,
+                    entry_name=entry_name,
+                )
+            except Exception:
+                continue
+            workspaces.add(workspace_name)
+
+    return sorted(workspaces)
 
 
 def run_submit(args: Namespace) -> None:
     workspace_name = _resolve_workspace_name(args)
-    run_compile(args)
-
-    source_dir = safe_join_child(args.build_base, workspace_name)
-    if not os.path.exists(source_dir):
-        print(f"Build directory '{source_dir}' does not exist.", file=sys.stderr)
-        sys.exit(1)
-
     workspace_path = safe_join_child(args.workspace_base, workspace_name)
-    workspace_files = _collect_relative_files(workspace_path)
-
     posts_dir = os.path.join(args.root_dir, "posts")
     today_str = datetime.now().strftime("%Y-%m-%d")
     amend_mode = getattr(args, "amend", False)
@@ -371,57 +660,56 @@ def run_submit(args: Namespace) -> None:
         amend_mode=amend_mode,
         today_str=today_str,
     )
-
-    dest_base_dir = os.path.join(posts_dir, date_str)
-    os.makedirs(dest_base_dir, exist_ok=True)
-    dest_dir = os.path.join(dest_base_dir, dest_dir_name)
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    source_dest_dir = _prepare_submission_tree(
-        source_dir=source_dir,
+    _submit_to_destination(
+        args=args,
+        workspace_name=workspace_name,
         workspace_path=workspace_path,
-        dest_dir=dest_dir,
-    )
-    _compile_filelist_page(
-        build_base=args.build_base,
-        base_dir=base_dir,
-        source_dest_dir=source_dest_dir,
-    )
-
-    post_title = _extract_declared_title(
-        os.path.join(workspace_path, "main.typ"),
-        workspace_name,
-    )
-    pdf_name, post_asset_hash = _extract_post_pdf_name(dest_dir)
-    meta_fields = _build_meta_fields(
-        workspace_name=workspace_name,
         date_str=date_str,
-        target_rev=target_rev,
         dest_dir_name=dest_dir_name,
-        post_title=post_title,
-        pdf_name=pdf_name,
-        post_source_hash=post_asset_hash,
-        workspace_files=workspace_files,
-    )
-    _compile_meta_page(
-        build_base=args.build_base,
-        base_dir=base_dir,
-        dest_dir=dest_dir,
-        post_title=post_title,
-        meta_fields=meta_fields,
-        workspace_files=workspace_files,
-    )
-
-    _write_workspace_manifest(
-        manifest_path=os.path.join(source_dest_dir, ".workspace-manifest.json"),
-        workspace_name=workspace_name,
-        publish_date=date_str,
-        revision_name=dest_dir_name,
-        files=workspace_files,
+        target_rev=target_rev,
+        amend_mode=did_amend_existing,
     )
 
     if did_amend_existing:
-        print(f"Amended '{workspace_name}' in '{dest_dir}'")
+        print(f"Amended '{workspace_name}' in '{os.path.join(posts_dir, date_str, dest_dir_name)}'")
     else:
-        print(f"Submitted '{workspace_name}' to '{dest_dir}'")
+        print(f"Submitted '{workspace_name}' to '{os.path.join(posts_dir, date_str, dest_dir_name)}'")
     
     update_content(args)
+
+
+def run_amend_all(args: Namespace) -> None:
+    posts_dir = os.path.join(args.root_dir, "posts")
+    workspaces = _collect_published_workspaces(posts_dir)
+    if not workspaces:
+        print(f"No published workspaces found in '{posts_dir}'.")
+        return
+
+    amended_count = 0
+    for workspace_name in workspaces:
+        date_str, dest_dir_name, target_rev = _find_latest_revision_entry(posts_dir, workspace_name)
+        post_dir = os.path.join(posts_dir, date_str, dest_dir_name)
+        source_dir = os.path.join(post_dir, "source")
+        if not os.path.isdir(source_dir):
+            print(f"Skipping '{workspace_name}': '{source_dir}' does not exist.", file=sys.stderr)
+            continue
+
+        _, publish_date, revision = _resolve_existing_post_metadata(
+            post_dir=post_dir,
+            date_str=date_str,
+            entry_name=dest_dir_name,
+        )
+        _submit_to_destination(
+            args=args,
+            workspace_name=workspace_name,
+            workspace_path=source_dir,
+            date_str=publish_date,
+            dest_dir_name=dest_dir_name,
+            target_rev=revision if revision == target_rev else target_rev,
+            amend_mode=True,
+        )
+        amended_count += 1
+        print(f"Amended '{workspace_name}' in '{post_dir}'")
+
+    update_content(args)
+    print(f"Amended {amended_count} published workspace(s).")

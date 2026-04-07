@@ -1,6 +1,5 @@
 import os
 import re
-import hashlib
 import html
 import json
 from argparse import Namespace
@@ -9,6 +8,8 @@ from typing import Any, Dict, List, Tuple
 from .utils import (
     reset_directory,
     compile_and_build_html,
+    copy_driver_web_js,
+    hash_text_with_sources,
 )
 
 
@@ -180,13 +181,20 @@ def update_content(args: Namespace) -> None:
     output_dir = os.path.join(build_base, "content")
     reset_directory(output_dir)
 
-    asset_hash = hashlib.sha256(content_source.encode("utf-8")).hexdigest()[:6]
+    template_typ_path = os.path.join(base_dir, "template.typ")
+    asset_hash = hash_text_with_sources(
+        content_source,
+        [template_typ_path],
+    )
 
     content_source_bytes = content_source.encode()
     template_path = os.path.join(base_dir, "index.template.html")
 
     root_dir: str = args.root_dir
     os.makedirs(root_dir, exist_ok=True)
+    copied_driver_js = copy_driver_web_js(base_dir, root_dir)
+    if copied_driver_js:
+        print(f"Copied {copied_driver_js} driver JS file(s) to '{root_dir}'.")
 
     compile_and_build_html(
         source_bytes=content_source_bytes,
@@ -200,6 +208,7 @@ def update_content(args: Namespace) -> None:
         description=parsed_subtitle,
         extract_title_from_pdf=False,
         hidden_text_override=hidden_text,
+        clipboard_asset_path=os.path.join(root_dir, "clipboard.min.js"),
     )
 
     config_path: str = getattr(args, "config", "")

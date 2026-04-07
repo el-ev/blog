@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -11,6 +12,7 @@
             --page-bg: #ffffff;
             --shadow-color: rgba(0, 0, 0, 0.1);
         }
+
         .sr-only {
             position: absolute;
             width: 1px;
@@ -21,6 +23,7 @@
             clip: rect(0, 0, 0, 0);
             border: 0;
         }
+
         body {
             margin: 0;
             padding: 20px;
@@ -30,6 +33,7 @@
             background-color: var(--bg-color);
             font-family: system-ui, -apple-system, sans-serif;
         }
+
         main {
             width: 100%;
             max-width: 900px;
@@ -38,6 +42,7 @@
             gap: 20px;
             align-items: center;
         }
+
         .page {
             max-width: 100%;
             width: 100%;
@@ -46,12 +51,35 @@
             box-shadow: 0 4px 12px var(--shadow-color);
             display: block;
         }
+
+        #raw-copy-toast {
+            position: fixed;
+            left: 50%;
+            bottom: 24px;
+            font-family: Consolas, "Courier New", monospace;
+            transform: translateX(-50%);
+            font-size: 13px;
+            line-height: 1;
+            padding: 9px 12px;
+            border-radius: 8px;
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.18);
+            color: #222;
+            background: #eee;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 120ms ease;
+            z-index: 9999;
+        }
     </style>
 </head>
+
 <body>
-    <main>
+<main>
 {{TEXT}}
+{{RAW_COPY}}
 {{PAGES}}
-    </main>
+</main>
+<script src="{{CLIPBOARD_SRC}}"></script>
 </body>
+
 </html>

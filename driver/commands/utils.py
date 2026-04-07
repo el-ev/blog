@@ -5,11 +5,34 @@ import hashlib
 import shutil
 import subprocess
 import sys
-from typing import Optional, List, Tuple, Dict, Set
+import json
+import tempfile
+from typing import Optional, List, Tuple, Dict, Set, Union
+from typing import Any
 
 
 _typst_path: Optional[str] = None
 _WORKSPACE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+WORKSPACE_PUBLIC_DIR_NAME = "public"
+_SVGO_CONFIG_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)),
+    "svgo.config.mjs",
+)
+
+
+def make_raw_copy_id(text: str) -> str:
+    digest = hashlib.sha1(text.encode("utf-8")).hexdigest()[:10]
+    return f"raw-copy-{digest}"
+
+
+def _resolve_typst_path() -> str:
+    global _typst_path
+    if _typst_path is None:
+        _typst_path = shutil.which("typst") or shutil.which("typst.exe")
+    if not _typst_path:
+        print("Typst executable not found in PATH.")
+        sys.exit(1)
+    return _typst_path
 
 
 def reset_directory(path: str) -> None:
@@ -42,21 +65,42 @@ def safe_join_child(base_dir: str, child_name: str) -> str:
     return child_abs
 
 
+def build_relative_href(from_dir: str, target_path: str) -> str:
+    rel_path = os.path.relpath(target_path, start=from_dir).replace("\\", "/")
+    if not rel_path.startswith("."):
+        return f"./{rel_path}"
+    return rel_path
+
+
+def copy_driver_web_js(driver_dir: str, webroot_dir: str) -> int:
+    if not os.path.isdir(driver_dir):
+        return 0
+
+    os.makedirs(webroot_dir, exist_ok=True)
+    copied_count = 0
+    for filename in sorted(os.listdir(driver_dir)):
+        if not filename.endswith(".js"):
+            continue
+
+        src_path = os.path.join(driver_dir, filename)
+        if not os.path.isfile(src_path):
+            continue
+
+        dst_path = safe_join_child(webroot_dir, filename)
+        shutil.copy2(src_path, dst_path)
+        copied_count += 1
+
+    return copied_count
+
+
 def run_typst_compile(
     source_bytes: bytes,
     output_path: str,
     export_format: str,
     inputs: Optional[Dict[str, str]] = None,
 ) -> None:
-    global _typst_path
-    if _typst_path is None:
-        _typst_path = shutil.which("typst") or shutil.which("typst.exe")
-        if not _typst_path:
-            print("Typst executable not found in PATH.")
-            sys.exit(1)
-
     command = [
-        _typst_path,
+        _resolve_typst_path(),
         "compile",
         "-",
         output_path,
@@ -82,8 +126,213 @@ def run_typst_compile(
         raise RuntimeError(f"Typst compilation failed. Exit code {e.returncode}") from e
 
 
-def sources_hash(paths: List[str], length: int = 6) -> str:
-    hasher = hashlib.sha256()
+def _flatten_query_text(node: Any) -> str:
+    if isinstance(node, str):
+        return node
+    if isinstance(node, list):
+        return "".join(_flatten_query_text(item) for item in node)
+    if isinstance(node, dict):
+        parts: List[str] = []
+        text = node.get("text")
+        if isinstance(text, str):
+            parts.append(text)
+        for key in ("body", "children", "child", "value", "values", "content"):
+            if key in node:
+                parts.append(_flatten_query_text(node[key]))
+        if not parts:
+            for value in node.values():
+                parts.append(_flatten_query_text(value))
+        return "".join(parts)
+    return ""
+
+
+def extract_typst_links(
+    main_typ_path: str,
+    query_root: str,
+    inputs: Optional[Dict[str, str]] = None,
+) -> List[Tuple[str, str]]:
+    links: List[Tuple[str, str]] = []
+    seen: Set[str] = set()
+
+    abs_main_typ = os.path.abspath(main_typ_path)
+    abs_query_root = os.path.abspath(query_root)
+    query_input = os.path.relpath(abs_main_typ, start=abs_query_root).replace("\\", "/")
+
+    command = [
+        _resolve_typst_path(),
+        "query",
+        query_input,
+        "link",
+        "--root",
+        abs_query_root,
+        "--format",
+        "json",
+    ]
+    if inputs:
+        for key, value in inputs.items():
+            command.extend(["--input", f"{key}={value}"])
+
+    try:
+        result = subprocess.run(
+            command,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as e:
+        print(f"Failed to query links from Typst source: {e}", file=sys.stderr)
+        stderr = (e.stderr or "").strip()
+        if stderr:
+            print(stderr, file=sys.stderr)
+        return links
+
+    raw = result.stdout.strip()
+    if not raw:
+        return links
+
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        print(f"Failed to parse Typst query output: {e}", file=sys.stderr)
+        return links
+
+    if not isinstance(data, list):
+        return links
+
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        href = item.get("dest")
+        if not isinstance(href, str) or not href or href in seen:
+            continue
+
+        label = re.sub(r"\s+", " ", _flatten_query_text(item.get("body"))).strip()
+        if not label:
+            label = href
+
+        seen.add(href)
+        links.append((href, label))
+
+    return links
+
+
+def extract_typst_raws(
+    main_typ_path: str,
+    query_root: str,
+    inputs: Optional[Dict[str, str]] = None,
+) -> List[Tuple[str, bool]]:
+    raws: List[Tuple[str, bool]] = []
+
+    abs_main_typ = os.path.abspath(main_typ_path)
+    abs_query_root = os.path.abspath(query_root)
+    query_input = os.path.relpath(abs_main_typ, start=abs_query_root).replace("\\", "/")
+
+    command = [
+        _resolve_typst_path(),
+        "query",
+        query_input,
+        "raw",
+        "--root",
+        abs_query_root,
+        "--format",
+        "json",
+    ]
+    if inputs:
+        for key, value in inputs.items():
+            command.extend(["--input", f"{key}={value}"])
+
+    try:
+        result = subprocess.run(
+            command,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as e:
+        print(f"Failed to query raw elements from Typst source: {e}", file=sys.stderr)
+        stderr = (e.stderr or "").strip()
+        if stderr:
+            print(stderr, file=sys.stderr)
+        return raws
+
+    raw = result.stdout.strip()
+    if not raw:
+        return raws
+
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        print(f"Failed to parse Typst raw query output: {e}", file=sys.stderr)
+        return raws
+
+    if not isinstance(data, list):
+        return raws
+
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        text = item.get("text")
+        if not isinstance(text, str):
+            continue
+        is_block = bool(item.get("block", False))
+        raws.append((text, is_block))
+
+    return raws
+
+
+def extract_typst_raws_from_content(
+    source_content: Union[str, bytes],
+    query_root: str,
+    inputs: Optional[Dict[str, str]] = None,
+) -> List[Tuple[str, bool]]:
+    temp_query_path = ""
+    try:
+        if isinstance(source_content, bytes):
+            with tempfile.NamedTemporaryFile(
+                mode="wb",
+                suffix=".typ",
+                prefix=".raw-query-",
+                dir=query_root,
+                delete=False,
+            ) as temp_file:
+                temp_file.write(source_content)
+                temp_query_path = temp_file.name
+        else:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                suffix=".typ",
+                prefix=".raw-query-",
+                dir=query_root,
+                delete=False,
+                encoding="utf-8",
+            ) as temp_file:
+                temp_file.write(source_content)
+                temp_query_path = temp_file.name
+
+        return extract_typst_raws(
+            temp_query_path,
+            query_root=query_root,
+            inputs=inputs,
+        )
+    finally:
+        if temp_query_path and os.path.exists(temp_query_path):
+            os.remove(temp_query_path)
+
+
+def build_raw_copy_assets(raw_entries: List[Tuple[str, bool]]) -> str:
+    raw_copy_ids = [make_raw_copy_id(text) for text, _ in raw_entries]
+    raw_texts = {
+        raw_copy_id: text
+        for raw_copy_id, (text, _) in zip(raw_copy_ids, raw_entries)
+    }
+    json_payload = json.dumps(raw_texts, ensure_ascii=False).replace("</", "<\\/")
+    raw_copy_html = (
+        f'<script id="raw-copy-data" type="application/json">{json_payload}</script>'
+    )
+    return raw_copy_html
+
+
+def _collect_typ_files(paths: List[str]) -> List[str]:
     typ_files: List[str] = []
 
     for path in paths:
@@ -98,12 +347,28 @@ def sources_hash(paths: List[str], length: int = 6) -> str:
                     if name.endswith(".typ"):
                         typ_files.append(os.path.abspath(os.path.join(root, name)))
 
-    typ_files = sorted(set(typ_files))
+    return sorted(set(typ_files))
+
+
+def _update_hash_with_typ_files(hasher: "hashlib._Hash", paths: List[str]) -> None:
+    typ_files = _collect_typ_files(paths)
     for file_path in typ_files:
         rel_path = os.path.relpath(file_path, start=os.getcwd()).replace("\\", "/")
         hasher.update(rel_path.encode("utf-8"))
         with open(file_path, "rb") as f:
             hasher.update(f.read())
+
+
+def sources_hash(paths: List[str], length: int = 6) -> str:
+    hasher = hashlib.sha256()
+    _update_hash_with_typ_files(hasher, paths)
+    return hasher.hexdigest()[:length]
+
+
+def hash_text_with_sources(text: str, paths: List[str], length: int = 6) -> str:
+    hasher = hashlib.sha256()
+    hasher.update(text.encode("utf-8"))
+    _update_hash_with_typ_files(hasher, paths)
 
     return hasher.hexdigest()[:length]
 
@@ -133,26 +398,29 @@ def extract_pdf_text(
     return title, hidden_text
 
 
-def extract_pdf_links(pdf_path: str) -> List[Tuple[str, str]]:
-    links: List[Tuple[str, str]] = []
-    seen: Set[str] = set()
-    try:
-        import pymupdf
-        from typing import cast, Any
-        
-        if os.path.exists(pdf_path):
-            doc = pymupdf.open(pdf_path)
-            doc_any = cast(Any, doc)
-            for page in doc_any:
-                for item in page.get_links():
-                    href = item.get("uri") or item.get("file")
-                    if not href or href in seen:
-                        continue
-                    seen.add(href)
-                    links.append((href, href))
-    except Exception:
-        pass
-    return links
+def rewrite_clipboard_script_src(html_path: str, clipboard_asset_path: str) -> bool:
+    if not os.path.isfile(html_path):
+        return False
+
+    with open(html_path, "r", encoding="utf-8") as f:
+        html_content = f.read()
+
+    clipboard_src = build_relative_href(
+        os.path.dirname(html_path),
+        clipboard_asset_path,
+    )
+    updated_html = re.sub(
+        r'(<script\s+src=")[^"]*clipboard\.min\.js(")',
+        rf"\1{clipboard_src}\2",
+        html_content,
+        count=1,
+    )
+    if updated_html == html_content:
+        return False
+
+    with open(html_path, "w", encoding="utf-8") as f:
+        f.write(updated_html)
+    return True
 
 
 def _is_generated_svg(filename: str, svg_name_prefix: str = "page") -> bool:
@@ -167,7 +435,7 @@ def _is_generated_svg(filename: str, svg_name_prefix: str = "page") -> bool:
 def patch_svg_file(
     src_path: str,
     dst_path: str,
-    svg_href_rewrites: Optional[Dict[str, str]]
+    svg_href_rewrites: Optional[Dict[str, str]],
 ) -> Tuple[str, str]:
     with open(src_path, "r", encoding="utf-8") as svg_file:
         svg_data = svg_file.read()
@@ -199,7 +467,20 @@ def patch_svg_file(
             svg_data,
         )
 
-    svg_data = svg_data.replace("<a ", '<a target="_top" ')
+    def _rewrite_anchor_tag(match: re.Match) -> str:
+        attrs = match.group(1)
+        raw_copy_match = re.search(
+            r'\s+(?:xlink:href|href)="javascript:parent.copyCode\(\"raw-copy-[0-9a-f]{10}\"\)"',
+            attrs,
+        )
+        if raw_copy_match:
+            return f"<a{attrs}>"
+
+        if re.search(r'\s+target="[^"]*"', attrs):
+            return f"<a{attrs}>"
+        return f'<a target="_top"{attrs}>'
+
+    svg_data = re.sub(r"<a([^>]*)>", _rewrite_anchor_tag, svg_data)
     svg_data = re.sub(r'\sclass="[^"]+"', "", svg_data)
 
     with open(dst_path, "w", encoding="utf-8") as svg_file:
@@ -207,12 +488,30 @@ def patch_svg_file(
 
     svgo_path = shutil.which("svgo") or shutil.which("svgo.cmd")
     if svgo_path:
+        command = [
+            svgo_path,
+            dst_path,
+            "-o",
+            dst_path,
+            "--multipass",
+            "--precision",
+            "2",
+        ]
+        if os.path.isfile(_SVGO_CONFIG_PATH):
+            command.extend(["--config", _SVGO_CONFIG_PATH])
+
         try:
-            subprocess.run([svgo_path, dst_path, "-o", dst_path], check=True, capture_output=True)
+            subprocess.run(command, check=True, capture_output=True)
         except subprocess.CalledProcessError as e:
-            print(f"SVGO failed for {dst_path}", file=sys.stderr)
+            print(f"Aggressive SVGO failed for {dst_path}; retrying with defaults.", file=sys.stderr)
             if e.stderr:
                 print(e.stderr.decode("utf-8"), file=sys.stderr)
+            try:
+                subprocess.run([svgo_path, dst_path, "-o", dst_path], check=True, capture_output=True)
+            except subprocess.CalledProcessError as fallback_error:
+                print(f"SVGO failed for {dst_path}", file=sys.stderr)
+                if fallback_error.stderr:
+                    print(fallback_error.stderr.decode("utf-8"), file=sys.stderr)
     else:
         print("SVGO not found, skipping SVG optimization.", file=sys.stderr)
 
@@ -237,16 +536,17 @@ def build_html_from_svgs(
     default_title: str = "Blog Post",
     description: Optional[str] = None,
     hidden_text_override: Optional[str] = None,
+    raw_copy_html: str = "",
     top_bar_html: str = "",
     revision_html: str = "",
     svg_name_prefix: str = "page",
     html_filename: str = "index.html",
+    clipboard_asset_path: Optional[str] = None,
 ) -> str:
     with open(template_path, "r", encoding="utf-8") as f:
         template = f.read()
 
     page_links_list: List[str] = []
-
     os.makedirs(dest_dir, exist_ok=True)
 
     svg_files = sorted(
@@ -264,7 +564,11 @@ def build_html_from_svgs(
         src_path = os.path.join(output_dir, filename)
         dst_path = os.path.join(dest_dir, filename)
 
-        aspect_ratio, max_width_style = patch_svg_file(src_path, dst_path, svg_href_rewrites)
+        aspect_ratio, max_width_style = patch_svg_file(
+            src_path,
+            dst_path,
+            svg_href_rewrites,
+        )
 
         page_title = title_format.replace("{i}", str(i))
         page_links_list.append(
@@ -292,10 +596,19 @@ def build_html_from_svgs(
     index_content = index_content.replace("{{DESCRIPTION}}", html.escape(meta_description))
     index_content = index_content.replace("{{TITLE}}", html.escape(title))
     index_content = index_content.replace("{{TEXT}}", hidden_text)
+    index_content = index_content.replace("{{RAW_COPY}}", raw_copy_html)
     index_content = index_content.replace("{{TOPBAR}}", top_bar_html)
     index_content = index_content.replace("{{REVISION}}", revision_html)
 
     index_path = os.path.join(dest_dir, html_filename)
+    clipboard_src = ""
+    if clipboard_asset_path:
+        clipboard_src = build_relative_href(
+            os.path.dirname(index_path),
+            clipboard_asset_path,
+        )
+    index_content = index_content.replace("{{CLIPBOARD_SRC}}", html.escape(clipboard_src))
+
     with open(index_path, "w", encoding="utf-8") as f:
         f.write(index_content)
 
@@ -350,9 +663,11 @@ def compile_and_build_html(
     inputs_pdf: Optional[Dict[str, str]] = None,
     extract_title_from_pdf: bool = False,
     hidden_text_override: Optional[str] = None,
+    raw_copy_html: str = "",
     svg_href_rewrites: Optional[Dict[str, str]] = None,
     svg_name_prefix: str = "page",
     html_filename: str = "index.html",
+    clipboard_asset_path: Optional[str] = None,
 ) -> str:
     svg_prefix = f"{svg_name_prefix}{{0p}}.{asset_hash}.svg"
     pdf_name = f"{file_prefix}.{asset_hash}.pdf"
@@ -388,6 +703,8 @@ def compile_and_build_html(
         default_title=default_title,
         description=description,
         hidden_text_override=hidden_text_override,
+        raw_copy_html=raw_copy_html,
         svg_name_prefix=svg_name_prefix,
         html_filename=html_filename,
+        clipboard_asset_path=clipboard_asset_path,
     )

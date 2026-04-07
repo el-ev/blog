@@ -3,7 +3,11 @@ import sys
 import shutil
 from argparse import Namespace
 
-from .utils import validate_workspace_name, safe_join_child
+from .utils import (
+    WORKSPACE_PUBLIC_DIR_NAME,
+    validate_workspace_name,
+    safe_join_child,
+)
 
 def run_init(args: Namespace) -> None:
     workspace_base: str = args.workspace_base
@@ -27,4 +31,5 @@ def run_init(args: Namespace) -> None:
         sys.exit(1)
         
     shutil.copytree(template_dir, workspace_path)
+    os.makedirs(os.path.join(workspace_path, WORKSPACE_PUBLIC_DIR_NAME), exist_ok=True)
     print(f"Workspace created at {workspace_path}")

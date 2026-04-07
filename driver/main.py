@@ -5,7 +5,7 @@ from argparse import ArgumentParser, BooleanOptionalAction, Namespace
 
 from commands.init import run_init
 from commands.compile import run_compile
-from commands.submit import run_submit
+from commands.submit import run_submit, run_amend_all
 from commands.update import update_content as run_update
 from commands.upload import run_upload
 from commands.recover import run_recover
@@ -40,6 +40,10 @@ def _add_command_parsers(subparsers: argparse._SubParsersAction) -> None:
         dest="amend",
     )
     subparsers.add_parser("submit", parents=[submit_parser], add_help=False)
+    subparsers.add_parser(
+        "amend-all",
+        help="Amend the latest published revision of every workspace using its bundled source snapshot.",
+    )
 
     recover_parser = ArgumentParser(add_help=False)
     recover_parser.add_argument(
@@ -119,6 +123,7 @@ def main() -> None:
         "init": run_init,
         "compile": run_compile,
         "submit": run_submit,
+        "amend-all": run_amend_all,
         "recover": run_recover,
         "update": run_update,
         "upload": run_upload,

@@ -1,14 +1,8 @@
-#import "driver/template.typ": base_layout
+#import "driver/template.typ": driver_page
 #let title = "Blog"
 #let subtitle = "It is unlikely that there will be many posts here."
 
-#show: base_layout.with(title: title)
-
-#align(center)[
-  #text(weight: "bold", size: 24pt)[#title]
-  #v(-0.4cm)
-  #text(size: 12pt, fill: luma(100))[#subtitle]
-]
+#show: driver_page.with(title: title, subtitle: subtitle)
 
 = Content
 #v(-0.2cm)

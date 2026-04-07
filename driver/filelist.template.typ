@@ -1,12 +1,7 @@
-#import "driver/template.typ": base_layout
+#import "driver/template.typ": driver_page
 #let title = "Files"
 
-#show: base_layout.with(title: title)
-
-#align(center)[
-  #text(weight: "bold", size: 24pt)[#title]
-  #v(-0.4cm)
-]
+#show: driver_page.with(title: title)
 
 = Content
 
