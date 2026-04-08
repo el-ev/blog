@@ -1,11 +1,12 @@
-#let title = "Your Awesome Article"
+#import "../../driver/template.typ": *;
+
+#let title = "Your Article Title"
 
 #let content = [
-  Place your article content here.
+  Write your article here.
 ]
 
 #if sys.inputs.at("with_driver", default: "false") == "false" {
-  import "../../driver/template.typ": article;
   show: article.with(title: title)
   content
 }

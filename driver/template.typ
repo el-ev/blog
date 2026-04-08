@@ -14,13 +14,25 @@
   )
 }
 
-#let base_layout(title: none, body) = {
+#let info(body) = block(
+  fill: luma(248),
+  stroke: (left: 0.18em + luma(120)),
+  width: 100%,
+  inset: (x: 1em, y: 0.85em),
+  radius: 0.15em,
+  [
+    #set text(fill: luma(20))
+    #body
+  ],
+)
+
+#let base_layout(title: none, page_margin: (x: 1cm, y: 1cm), body) = {
   if title != none {
     set document(title: title)
   }
   set page(
     paper: "iso-b5",
-    margin: (x: 1cm, y: 1cm),
+    margin: page_margin,
     footer: [
       #set text(fill: gray, size: 10pt)
       #justify_align(
@@ -55,6 +67,7 @@
         fill: luma(245),
         width: 100%,
         inset: 1em,
+        breakable: true,
         radius: 0.3em,
         [
           #set text(size: 0.9em, fill: luma(20))
@@ -100,9 +113,10 @@
   date: none,
   top_bar: none,
   justify: false,
+  page_margin: (x: 1cm, y: 1cm),
   body,
 ) = {
-  show: base_layout.with(title: title)
+  show: base_layout.with(title: title, page_margin: page_margin)
 
   if justify {
     set par(justify: true, first-line-indent: 0pt, leading: 0.75em)
