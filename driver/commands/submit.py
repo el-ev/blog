@@ -15,6 +15,7 @@ from .utils import (
     build_raw_copy_assets,
     reset_directory,
     compile_and_build_html,
+    extract_declared_typst_string,
     extract_typst_raws_from_content,
     hash_text_with_sources,
     validate_workspace_name,
@@ -94,20 +95,10 @@ def _collect_relative_files(base_dir: str) -> List[str]:
     return _normalize_relative_paths(file_paths)
 
 
-def _extract_declared_title(main_typ_path: str, fallback: str) -> str:
-    if not os.path.isfile(main_typ_path):
-        return fallback
-    try:
-        with open(main_typ_path, "r", encoding="utf-8") as f:
-            source = f.read()
-        match = re.search(r'#let\s+title\s*=\s*"([^"]+)"', source)
-        if match:
-            title = match.group(1).strip()
-            if title:
-                return title
-    except Exception:
-        pass
-    return fallback
+def _extract_post_headers(main_typ_path: str, fallback_title: str) -> Tuple[str, Optional[str]]:
+    title = extract_declared_typst_string(main_typ_path, "title") or fallback_title
+    subtitle = extract_declared_typst_string(main_typ_path, "subtitle")
+    return title, subtitle
 
 
 def _extract_post_pdf_name(post_dir: str) -> Tuple[str, str]:
@@ -462,12 +453,13 @@ def _build_meta_fields(
     target_rev: int,
     dest_dir_name: str,
     post_title: str,
+    post_subtitle: Optional[str],
     pdf_name: str,
     post_source_hash: str,
     workspace_files: List[str],
 ) -> Dict[str, str]:
     generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    return {
+    fields = {
         "Post Title": post_title,
         "Workspace Name": workspace_name,
         "Publish Date": date_str,
@@ -478,6 +470,9 @@ def _build_meta_fields(
         "Generated At": generated_at,
         "Source File Count": str(len(workspace_files)),
     }
+    if post_subtitle:
+        fields["Post Subtitle"] = post_subtitle
+    return fields
 
 
 def _compile_meta_page(
@@ -582,7 +577,7 @@ def _submit_to_destination(
             workspace_files=workspace_files,
         )
 
-        post_title = _extract_declared_title(
+        post_title, post_subtitle = _extract_post_headers(
             os.path.join(staged_workspace_path, "main.typ"),
             workspace_name,
         )
@@ -593,6 +588,7 @@ def _submit_to_destination(
             target_rev=target_rev,
             dest_dir_name=dest_dir_name,
             post_title=post_title,
+            post_subtitle=post_subtitle,
             pdf_name=pdf_name,
             post_source_hash=post_asset_hash,
             workspace_files=workspace_files,

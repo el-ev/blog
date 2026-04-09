@@ -13,6 +13,7 @@ from typing import Any
 
 _typst_path: Optional[str] = None
 _WORKSPACE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+_TYPST_DECLARED_STRING_PATTERN_TEMPLATE = r'#let\s+{name}\s*=\s*"([^"]*)"'
 WORKSPACE_PUBLIC_DIR_NAME = "public"
 _SVGO_CONFIG_PATH = os.path.join(
     os.path.dirname(os.path.dirname(__file__)),
@@ -70,6 +71,25 @@ def build_relative_href(from_dir: str, target_path: str) -> str:
     if not rel_path.startswith("."):
         return f"./{rel_path}"
     return rel_path
+
+
+def extract_declared_typst_string_from_source(source: str, name: str) -> Optional[str]:
+    pattern = re.compile(_TYPST_DECLARED_STRING_PATTERN_TEMPLATE.format(name=re.escape(name)))
+    match = pattern.search(source)
+    if not match:
+        return None
+    value = match.group(1).strip()
+    return value or None
+
+
+def extract_declared_typst_string(path: str, name: str) -> Optional[str]:
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return extract_declared_typst_string_from_source(f.read(), name)
+    except Exception:
+        return None
 
 
 def copy_driver_web_js(driver_dir: str, webroot_dir: str) -> int:

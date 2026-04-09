@@ -12,6 +12,7 @@ from .utils import (
     extract_typst_links,
     extract_typst_raws_from_content,
     extract_pdf_text,
+    extract_declared_typst_string,
     reset_directory,
     sources_hash,
     find_latest_revision,
@@ -348,6 +349,12 @@ def _prepare_compile_sources(base_dir: str, workspace_path: str) -> Tuple[bytes,
     return driver_source.encode(), main_typ_abs_path, asset_hash
 
 
+def _extract_post_headers(main_typ_path: str, workspace_name: str) -> Tuple[str, Optional[str]]:
+    title = extract_declared_typst_string(main_typ_path, "title") or workspace_name
+    subtitle = extract_declared_typst_string(main_typ_path, "subtitle")
+    return title, subtitle
+
+
 def _stage_workspace_for_compile(workspace_path: str, repo_root: str) -> Tuple[str, str]:
     workspace_abs = os.path.abspath(workspace_path)
     repo_abs = os.path.abspath(repo_root)
@@ -375,6 +382,8 @@ def _compile_initial_post_html(
     input_values_svg: Dict[str, str],
     input_values_pdf: Dict[str, str],
     raw_copy_html: str,
+    post_title: str,
+    post_subtitle: Optional[str],
 ) -> str:
     initial_hidden_text = _build_hidden_text(
         "",
@@ -393,7 +402,8 @@ def _compile_initial_post_html(
         template_path=os.path.join(base_dir, "index.template.html"),
         dest_dir=output_dir,
         title_format="Blog Page {i}",
-        default_title="Blog Post",
+        default_title=post_title,
+        description=post_subtitle,
         inputs_svg=input_values_svg,
         inputs_pdf=input_values_pdf,
         extract_title_from_pdf=True,
@@ -479,6 +489,7 @@ def run_compile(args: Namespace) -> None:
             base_dir,
             workspace_path,
         )
+        post_title, post_subtitle = _extract_post_headers(main_typ_abs_path, workspace_name)
 
         posts_dir = os.path.join(args.root_dir, "posts")
         skip_latest = getattr(args, "amend", False)
@@ -522,6 +533,8 @@ def run_compile(args: Namespace) -> None:
             input_values_svg=input_values_svg,
             input_values_pdf=input_values_pdf,
             raw_copy_html=raw_copy_html,
+            post_title=post_title,
+            post_subtitle=post_subtitle,
         )
 
         post_pdf_path = os.path.join(output_dir, f"post.{asset_hash}.pdf")

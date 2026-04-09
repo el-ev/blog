@@ -23,9 +23,11 @@
   none
 }
 
+#let subtitle = none
+
 // IMPORT_MAIN
 
-#show: article.with(title: title, top_bar: top_bar, date: article_date)
+#show: article.with(title: title, subtitle: subtitle, top_bar: top_bar, date: article_date)
 
 #content
 

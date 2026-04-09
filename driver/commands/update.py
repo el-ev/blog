@@ -9,6 +9,8 @@ from .utils import (
     reset_directory,
     compile_and_build_html,
     copy_driver_web_js,
+    extract_declared_typst_string,
+    extract_declared_typst_string_from_source,
     hash_text_with_sources,
 )
 
@@ -16,8 +18,6 @@ from .utils import (
 PostEntry = Dict[str, Any]
 PostsByDate = Dict[str, List[PostEntry]]
 
-_TITLE_PATTERN = re.compile(r'#let\s+title\s*=\s*"([^"]+)"')
-_SUBTITLE_PATTERN = re.compile(r'#let\s+subtitle\s*=\s*"([^"]+)"')
 _REVISION_SUFFIX_PATTERN = re.compile(r"-(\d+)$")
 
 
@@ -26,11 +26,9 @@ def _extract_post_title(main_typ_path: str, fallback: str) -> str:
         return fallback
 
     try:
-        with open(main_typ_path, "r", encoding="utf-8") as f:
-            content = f.read()
-        match = _TITLE_PATTERN.search(content)
-        if match:
-            return match.group(1)
+        title = extract_declared_typst_string(main_typ_path, "title")
+        if title:
+            return title
     except Exception:
         pass
     return fallback
@@ -80,14 +78,8 @@ def _collect_posts_by_date(posts_dir: str) -> PostsByDate:
 
 
 def _extract_template_headers(content_template: str) -> Tuple[str, str]:
-    parsed_title = "Blog"
-    parsed_subtitle = ""
-    title_match = _TITLE_PATTERN.search(content_template)
-    subtitle_match = _SUBTITLE_PATTERN.search(content_template)
-    if title_match:
-        parsed_title = title_match.group(1)
-    if subtitle_match:
-        parsed_subtitle = subtitle_match.group(1)
+    parsed_title = extract_declared_typst_string_from_source(content_template, "title") or "Blog"
+    parsed_subtitle = extract_declared_typst_string_from_source(content_template, "subtitle") or ""
     return parsed_title, parsed_subtitle
 
 

@@ -136,12 +136,14 @@
 
 #let article(
   title: "Article",
+  subtitle: none,
   date: datetime.today().display(),
   top_bar: none,
   body,
 ) = {
   driver_page(
     title: title,
+    subtitle: subtitle,
     date: date,
     top_bar: top_bar,
     justify: true,
