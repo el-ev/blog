@@ -8,6 +8,7 @@ from commands.submit import run_submit, run_amend_all
 from commands.update import run_update
 from commands.upload import run_upload
 from commands.recover import run_recover
+from commands.serve import run_serve
 from commands.utils import validate_workspace_name
 
 
@@ -93,6 +94,21 @@ def _add_command_parsers(subparsers: argparse._SubParsersAction) -> None:
         default=None,
         help="The Google Cloud project ID (optional if implicitly configured). Overrides config.",
     )
+    serve_parser = subparsers.add_parser(
+        "serve",
+        help="Serve the generated root directory over HTTP.",
+    )
+    serve_parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="Port for the local HTTP server (default: 8000).",
+    )
+    serve_parser.add_argument(
+        "--bind",
+        default="127.0.0.1",
+        help="Bind address for the local HTTP server (default: 127.0.0.1).",
+    )
 
 
 def _build_parser() -> ArgumentParser:
@@ -137,6 +153,7 @@ def main() -> None:
         "recover": run_recover,
         "update": run_update,
         "upload": run_upload,
+        "serve": run_serve,
     }
     command_handlers[str(args.command)](args)
 
