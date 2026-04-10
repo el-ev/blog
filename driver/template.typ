@@ -51,7 +51,24 @@
 
 #let nav_link(href, body) = link(href)[#body]
 
-#let a11y_action(action, body, label: none, role: "button") = {
+#let _driver_has_driver() = sys.inputs.at("with_driver", default: "false") == "true"
+#let _driver_is_svg_export() = sys.inputs.at("export_format", default: "svg") == "svg"
+
+#let right_top_bar(body, svg_only: true) = {
+  if svg_only and not _driver_is_svg_export() {
+    none
+  } else {
+    block(
+      width: 100%,
+      [
+        #set text(size: 10pt, fill: luma(100))
+        #align(right)[#body]
+      ],
+    )
+  }
+}
+
+#let action(action, body, label: none, role: "button") = {
   let label_metadata = if label == none {
     ""
   } else {
@@ -67,7 +84,7 @@
 
 #let a11y_copy_action(body, text) = {
   show underline: it => it.body
-  a11y_action(
+  action(
     "copy:" + bytes-to-hex(sha1(bytes(text))).slice(0, 10),
     body,
     label: "Copy",
@@ -75,9 +92,7 @@
 }
 
 #let with_raw_copy(body) = {
-  let raw_copy_enabled = (
-    sys.inputs.at("with_driver", default: "false") == "true" and sys.inputs.at("export_format", default: "svg") == "svg"
-  )
+  let raw_copy_enabled = _driver_has_driver() and _driver_is_svg_export()
 
   show raw: it => {
     if it.block {
@@ -134,19 +149,11 @@
 
   let back_href = sys.inputs.at("back_href", default: "./index.html")
 
-  let default_top_bar = if sys.inputs.at("export_format", default: "svg") == "svg" {
-    block(
-      width: 100%,
-      [
-        #set text(size: 10pt, fill: luma(100))
-        #align(right)[
-          #nav_link(back_href, [Back]) | #a11y_action("theme", [Theme], label: "Theme")
-        ]
-      ],
-    )
-  } else {
-    none
-  }
+  let default_top_bar = right_top_bar(
+    [
+      #nav_link(back_href, [Back]) | #action("theme", [Theme], label: "Theme")
+    ],
+  )
 
   let resolved_top_bar = if top_bar != none {
     top_bar

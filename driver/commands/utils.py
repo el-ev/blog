@@ -20,6 +20,7 @@ _typst_version: Optional[str] = None
 _svgo_path: Optional[str] = None
 _svgo_path_checked = False
 _svgo_missing_warned = False
+_terser_missing_warned = False
 _WORKSPACE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _TYPST_DECLARED_STRING_PATTERN_TEMPLATE = r'#let\s+{name}\s*=\s*"([^"]*)"'
 _ASSET_HASH_LENGTH = 6
@@ -334,7 +335,10 @@ def _remove_stale_hashed_assets(
 
         stale_path = os.path.join(asset_dir, filename)
         if os.path.isfile(stale_path):
-            os.remove(stale_path)
+            try:
+                os.remove(stale_path)
+            except FileNotFoundError:
+                continue
 
 
 def _write_hashed_asset(
@@ -363,12 +367,18 @@ def _write_hashed_asset(
 
 
 def _minify_js_source(source: str) -> str:
+    global _terser_missing_warned
+
     terser_path = shutil.which("terser") or shutil.which("terser.cmd")
     if not terser_path:
-        raise RuntimeError(
-            "JavaScript minification requires `terser` on PATH. "
-            "Install it with `npm install --global terser`."
-        )
+        if not _terser_missing_warned:
+            print(
+                "Terser not found, skipping JavaScript minification. "
+                "Install it with `npm install --global terser`.",
+                file=sys.stderr,
+            )
+            _terser_missing_warned = True
+        return source
 
     try:
         result = subprocess.run(
@@ -381,12 +391,25 @@ def _minify_js_source(source: str) -> str:
     except subprocess.CalledProcessError as e:
         stderr = e.stderr.strip() if e.stderr else ""
         if stderr:
-            raise RuntimeError(f"Terser minification failed: {stderr}") from e
-        raise RuntimeError("Terser minification failed.") from e
+            print(
+                f"Terser minification failed, using original JavaScript: {stderr}",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                "Terser minification failed, using original JavaScript.",
+                file=sys.stderr,
+            )
+        return source
 
     minified = result.stdout.strip()
     if not minified:
-        raise RuntimeError("Terser minification produced empty output.")
+        print(
+            "Terser minification produced empty output, using original JavaScript.",
+            file=sys.stderr,
+        )
+        return source
+
     return minified
 
 
@@ -400,8 +423,11 @@ def _remove_legacy_root_js_files(webroot_dir: str) -> int:
             continue
         target_path = os.path.join(webroot_dir, filename)
         if os.path.isfile(target_path):
-            os.remove(target_path)
-            removed_count += 1
+            try:
+                os.remove(target_path)
+                removed_count += 1
+            except FileNotFoundError:
+                continue
     return removed_count
 
 

@@ -1,9 +1,10 @@
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 import os
 import shutil
 import sys
 from argparse import Namespace
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .compile import run_compile
 from .content import update_content
@@ -38,6 +39,7 @@ def _submit_to_destination(
     dest_dir_name: str,
     target_rev: int,
     amend_mode: bool,
+    refresh_assets: bool = True,
 ) -> None:
     posts_dir = os.path.join(args.root_dir, "posts")
     dest_base_dir = os.path.join(posts_dir, date_str)
@@ -134,10 +136,11 @@ def _submit_to_destination(
             generated_at=existing_manifest_data["generated_at"] if amend_mode else None,
         )
 
-        refresh_glyph_assets(
-            root_dir=args.root_dir,
-            target_dirs=[dest_dir, source_dest_dir],
-        )
+        if refresh_assets:
+            refresh_glyph_assets(
+                root_dir=args.root_dir,
+                target_dirs=[dest_dir, source_dest_dir],
+            )
     finally:
         if temp_root is not None:
             shutil.rmtree(temp_root, ignore_errors=True)
@@ -181,6 +184,42 @@ def run_submit(args: Namespace) -> None:
     update_content(args)
 
 
+def _amend_latest_workspace(
+    args: Namespace,
+    posts_dir: str,
+    workspace_name: str,
+) -> Optional[Tuple[str, str, str]]:
+    date_str, dest_dir_name, target_rev = find_latest_revision_entry(
+        posts_dir,
+        workspace_name,
+    )
+    post_dir = os.path.join(posts_dir, date_str, dest_dir_name)
+    source_dir = os.path.join(post_dir, "source")
+    if not os.path.isdir(source_dir):
+        print(
+            f"Skipping '{workspace_name}': '{source_dir}' does not exist.",
+            file=sys.stderr,
+        )
+        return None
+
+    _, publish_date, revision = resolve_existing_post_metadata(
+        post_dir=post_dir,
+        date_str=date_str,
+        entry_name=dest_dir_name,
+    )
+    _submit_to_destination(
+        args=args,
+        workspace_name=workspace_name,
+        workspace_path=source_dir,
+        date_str=publish_date,
+        dest_dir_name=dest_dir_name,
+        target_rev=revision if revision == target_rev else target_rev,
+        amend_mode=True,
+        refresh_assets=False,
+    )
+    return workspace_name, post_dir, source_dir
+
+
 def run_amend_all(args: Namespace, refresh_content: bool = True) -> int:
     posts_dir = os.path.join(args.root_dir, "posts")
     workspaces = collect_published_workspaces(posts_dir)
@@ -189,37 +228,40 @@ def run_amend_all(args: Namespace, refresh_content: bool = True) -> int:
         return 0
 
     amended_count = 0
-    for workspace_name in workspaces:
-        date_str, dest_dir_name, target_rev = find_latest_revision_entry(
-            posts_dir, workspace_name
-        )
-        post_dir = os.path.join(posts_dir, date_str, dest_dir_name)
-        source_dir = os.path.join(post_dir, "source")
-        if not os.path.isdir(source_dir):
-            print(
-                f"Skipping '{workspace_name}': '{source_dir}' does not exist.",
-                file=sys.stderr,
+    glyph_target_dirs: List[str] = []
+    max_workers = min(len(workspaces), max(1, os.cpu_count() or 1))
+    future_to_workspace: Dict[Future[Optional[Tuple[str, str, str]]], str] = {}
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        for workspace_name in workspaces:
+            future = executor.submit(
+                _amend_latest_workspace,
+                args,
+                posts_dir,
+                workspace_name,
             )
-            continue
+            future_to_workspace[future] = workspace_name
 
-        _, publish_date, revision = resolve_existing_post_metadata(
-            post_dir=post_dir,
-            date_str=date_str,
-            entry_name=dest_dir_name,
-        )
-        _submit_to_destination(
-            args=args,
-            workspace_name=workspace_name,
-            workspace_path=source_dir,
-            date_str=publish_date,
-            dest_dir_name=dest_dir_name,
-            target_rev=revision if revision == target_rev else target_rev,
-            amend_mode=True,
-        )
-        amended_count += 1
-        print(f"Amended '{workspace_name}' in '{post_dir}'")
+        try:
+            for future in as_completed(future_to_workspace):
+                result = future.result()
+                if result is None:
+                    continue
+
+                workspace_name, post_dir, source_dir = result
+                amended_count += 1
+                glyph_target_dirs.extend([post_dir, source_dir])
+                print(f"Amended '{workspace_name}' in '{post_dir}'")
+        except Exception:
+            for pending_future in future_to_workspace:
+                pending_future.cancel()
+            raise
 
     if refresh_content:
         update_content(args)
+    elif glyph_target_dirs:
+        refresh_glyph_assets(
+            root_dir=args.root_dir,
+            target_dirs=glyph_target_dirs,
+        )
     print(f"Amended {amended_count} published workspace(s).")
     return amended_count

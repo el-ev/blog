@@ -9,19 +9,9 @@
   datetime.today().display()
 }
 
-#let top_bar = if export_format == "svg" {
-  block(
-    width: 100%,
-    [
-      #set text(size: 10pt, fill: luma(100))
-      #align(right)[
-        #nav_link("../../../index.html", [Contents]) | #nav_link("meta.html", [Meta]) | #nav_link("post.pdf", [PDF]) | #a11y_action("theme", [Theme], label: "Theme")
-      ]
-    ],
-  )
-} else {
-  none
-}
+#let top_bar = right_top_bar([
+  #nav_link("../../../index.html", [Contents]) | #nav_link("meta.html", [Meta]) | #nav_link("post.pdf", [PDF]) | #action("theme", [Theme], label: "Theme")
+])
 
 #let subtitle = none
 

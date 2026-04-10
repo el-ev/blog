@@ -19,10 +19,6 @@
             color: #e8ecf2;
         }
 
-        :root[data-glyphs-ready="false"] .page {
-            opacity: 0;
-        }
-
         main {
             position: relative;
             z-index: 1;
@@ -50,7 +46,6 @@
             root.classList.toggle("theme-light", !isDark);
             root.classList.toggle("theme-dark", isDark);
             root.style.colorScheme = isDark ? "dark" : "light";
-            root.setAttribute("data-glyphs-ready", "false");
         })();
     </script>
     <link rel="stylesheet" href="{{STYLESHEET_SRC}}">
@@ -63,7 +58,7 @@
 {{RAW_COPY}}
 {{PAGES}}
 </main>
-<script defer src="{{THEME_SRC}}" onerror="document.documentElement.setAttribute('data-glyphs-ready', 'true');"></script>
+<script defer src="{{THEME_SRC}}"></script>
 <script defer src="{{CLIPBOARD_SRC}}"></script>
 <!-- FCP/LCP trigger for Lighthouse -->
 <div aria-hidden="true" style="position: absolute; z-index: -1; top: 100px; opacity: 0.01;">

@@ -1,6 +1,8 @@
 import html
 import os
 import re
+import shutil
+import tempfile
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
@@ -10,7 +12,6 @@ from .utils import (
     extract_declared_typst_string,
     extract_typst_raws_from_content,
     hash_text_with_sources,
-    reset_directory,
 )
 
 _META_CODE_FIELD_PATTERN = re.compile(
@@ -199,29 +200,32 @@ def compile_meta_page(
         asset_dir=dest_dir,
     )
 
-    meta_output_dir = os.path.join(build_base, "meta")
-    reset_directory(meta_output_dir)
-    compile_and_build_html(
-        source_bytes=meta_source.encode("utf-8"),
-        output_dir=meta_output_dir,
-        asset_hash=meta_hash,
-        file_prefix="meta",
-        template_path=os.path.join(base_dir, "index.template.html"),
-        dest_dir=dest_dir,
-        title_format="Meta Page {i}",
-        default_title=f"{post_title} - Meta",
-        description=f"Metadata for {post_title}",
-        inputs_svg=input_values_svg,
-        inputs_pdf=input_values_pdf,
-        extract_title_from_pdf=False,
-        hidden_text_override=meta_hidden_text,
-        raw_copy_html=raw_copy_html,
-        svg_name_prefix="meta-page",
-        html_filename="meta.html",
-        stylesheet_asset_path=stylesheet_asset_path,
-        clipboard_asset_path=clipboard_asset_path,
-        theme_asset_path=theme_asset_path,
-        enable_shared_glyph_extraction=False,
-        global_glyph_asset_path=global_glyph_asset_path,
-        global_glyph_map_path=global_glyph_map_path,
-    )
+    os.makedirs(build_base, exist_ok=True)
+    meta_output_dir = tempfile.mkdtemp(prefix=".meta-build-", dir=build_base)
+    try:
+        compile_and_build_html(
+            source_bytes=meta_source.encode("utf-8"),
+            output_dir=meta_output_dir,
+            asset_hash=meta_hash,
+            file_prefix="meta",
+            template_path=os.path.join(base_dir, "index.template.html"),
+            dest_dir=dest_dir,
+            title_format="Meta Page {i}",
+            default_title=f"{post_title} - Meta",
+            description=f"Metadata for {post_title}",
+            inputs_svg=input_values_svg,
+            inputs_pdf=input_values_pdf,
+            extract_title_from_pdf=False,
+            hidden_text_override=meta_hidden_text,
+            raw_copy_html=raw_copy_html,
+            svg_name_prefix="meta-page",
+            html_filename="meta.html",
+            stylesheet_asset_path=stylesheet_asset_path,
+            clipboard_asset_path=clipboard_asset_path,
+            theme_asset_path=theme_asset_path,
+            enable_shared_glyph_extraction=False,
+            global_glyph_asset_path=global_glyph_asset_path,
+            global_glyph_map_path=global_glyph_map_path,
+        )
+    finally:
+        shutil.rmtree(meta_output_dir, ignore_errors=True)

@@ -2,9 +2,6 @@
     const STORAGE_KEY = "blog-color-theme";
     const LIGHT_THEME = "light";
     const DARK_THEME = "dark";
-    const GLYPH_READY_ATTR = "data-glyphs-ready";
-    const GLYPH_PRELOAD_SELECTOR = 'svg[data-glyph-preload="true"] use';
-    const GLYPH_PROBE_TIMEOUT_MS = 2000;
     const ACTION_PREFIX = "#action=";
     const COPY_ACTION_PREFIX = "copy:";
     const THEME_ACTION = "theme";
@@ -40,43 +37,6 @@
     const getPreferredTheme = () => {
         const media = window.matchMedia?.("(prefers-color-scheme: dark)");
         return media?.matches ? DARK_THEME : LIGHT_THEME;
-    };
-
-    const markGlyphsReady = () => {
-        document.documentElement.setAttribute(GLYPH_READY_ATTR, "true");
-    };
-
-    const resolveGlyphAssetUrl = () => {
-        const preloadUse = document.querySelector(GLYPH_PRELOAD_SELECTOR);
-        if (!preloadUse) {
-            return null;
-        }
-        const href = preloadUse.getAttribute("href") || "";
-        const glyphUrl = href.split("#")[0];
-        return glyphUrl || null;
-    };
-
-    const waitForGlyphAsset = () => {
-        const glyphUrl = resolveGlyphAssetUrl();
-        if (!glyphUrl) {
-            markGlyphsReady();
-            return;
-        }
-
-        let done = false;
-        const finish = () => {
-            if (done) {
-                return;
-            }
-            done = true;
-            markGlyphsReady();
-        };
-
-        const probe = new Image();
-        probe.addEventListener("load", finish, { once: true });
-        probe.addEventListener("error", finish, { once: true });
-        window.setTimeout(finish, GLYPH_PROBE_TIMEOUT_MS);
-        probe.src = glyphUrl;
     };
 
     const applyThemeToSvgRoot = (svgRoot, computedStyles) => {
@@ -258,8 +218,6 @@
         }
         applyTheme(theme, true);
     };
-
-    waitForGlyphAsset();
 
     const initialTheme = getSavedTheme() || getPreferredTheme();
     applyTheme(initialTheme);
