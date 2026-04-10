@@ -948,15 +948,13 @@ def build_raw_copy_assets(
     raw_entries: List[Tuple[str, bool]],
     asset_dir: Optional[str] = None,
 ) -> str:
-    block_raw_entries = [(text, block) for text, block in raw_entries if block]
-    if not block_raw_entries:
+    if not raw_entries:
         return ""
 
-    raw_copy_ids = [make_raw_copy_id(text) for text, _ in block_raw_entries]
-    raw_texts = {
-        raw_copy_id: text
-        for raw_copy_id, (text, _) in zip(raw_copy_ids, block_raw_entries)
-    }
+    raw_texts: Dict[str, str] = {}
+    for text, _ in raw_entries:
+        raw_copy_id = make_raw_copy_id(text)
+        raw_texts[raw_copy_id] = text
     json_payload = json.dumps(raw_texts, ensure_ascii=False).replace("</", "<\\/")
 
     if not asset_dir:
@@ -1956,6 +1954,17 @@ def _infer_svg_anchor_role(href: Optional[str]) -> Optional[str]:
     return None
 
 
+def _infer_svg_anchor_tabindex(href: Optional[str]) -> Optional[str]:
+    action_token, metadata = _parse_svg_action_href(href)
+    if action_token is None:
+        return None
+
+    explicit_tabindex = metadata.get("tabindex")
+    if explicit_tabindex:
+        return explicit_tabindex
+    return None
+
+
 _INDEX_HTML_SEGMENT_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _DATE_PATH_SEGMENT_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _INDEX_LABEL_LOWERCASE_WORDS = {
@@ -2094,6 +2103,18 @@ def _inject_svg_anchor_accessibility(svg_data: str) -> str:
         )
         if role is not None and not has_role:
             rewritten_attrs += f' role="{html.escape(role, quote=True)}"'
+
+        tabindex = _infer_svg_anchor_tabindex(href)
+        has_tabindex = (
+            re.search(
+                r"\s+tabindex\s*=\s*['\"][^'\"]*['\"]",
+                attrs,
+                flags=re.IGNORECASE,
+            )
+            is not None
+        )
+        if tabindex is not None and not has_tabindex:
+            rewritten_attrs += f' tabindex="{html.escape(tabindex, quote=True)}"'
 
         has_explicit_name = (
             re.search(r"\s+aria-label\s*=\s*['\"][^'\"]+['\"]", attrs, flags=re.IGNORECASE)

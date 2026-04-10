@@ -68,7 +68,7 @@
   }
 }
 
-#let action(action, body, label: none, role: "button") = {
+#let action(action, body, label: none, role: "button", tabindex: none) = {
   let label_metadata = if label == none {
     ""
   } else {
@@ -79,15 +79,21 @@
   } else {
     "|role:" + role
   }
-  link("#action=" + action + label_metadata + role_metadata)[#body]
+  let tabindex_metadata = if tabindex == none {
+    ""
+  } else {
+    "|tabindex:" + tabindex
+  }
+  link("#action=" + action + label_metadata + role_metadata + tabindex_metadata)[#body]
 }
 
-#let a11y_copy_action(body, text) = {
+#let a11y_copy_action(body, text, skip_tab: false) = {
   show underline: it => it.body
   action(
     "copy:" + bytes-to-hex(sha1(bytes(text))).slice(0, 10),
     body,
     label: "Copy",
+    tabindex: if skip_tab { "-1" } else { none },
   )
 }
 
@@ -117,7 +123,11 @@
         #set text(fill: luma(20))
         #it
       ]
-      content
+      if raw_copy_enabled {
+        a11y_copy_action(content, it.text, skip_tab: true)
+      } else {
+        content
+      }
     }
   }
 
