@@ -34,6 +34,8 @@ python3 driver/main.py amend-all
 python3 driver/main.py upload --config config.json
 ```
 
+This deploys to GCS. You may ignore it and upload `root/` to anywhere you like.
+
 ## Layout
 - `driver/`: CLI + templates
 - `workspace/`: local drafts (gitignored)
