@@ -26,6 +26,16 @@
   ],
 )
 
+#let numbered_image(image_body, description) = figure(
+  image_body,
+  caption: [#description],
+)
+
+#let numbered_table(description, ..table_args) = figure(
+  table(..table_args),
+  caption: [#description],
+)
+
 #let base_layout(title: none, page_margin: (x: 1cm, y: 1cm), body) = {
   if title != none {
     set document(title: title)
