@@ -162,6 +162,7 @@ def compile_meta_page(
     workspace_files: List[str],
     global_glyph_asset_path: str,
     global_glyph_map_path: str,
+    rss_feed_path: Optional[str] = None,
 ) -> None:
     meta_template_path = os.path.join(base_dir, "meta.template.typ")
     with open(meta_template_path, "r", encoding="utf-8") as f:
@@ -223,6 +224,7 @@ def compile_meta_page(
             stylesheet_asset_path=stylesheet_asset_path,
             clipboard_asset_path=clipboard_asset_path,
             theme_asset_path=theme_asset_path,
+            rss_feed_path=rss_feed_path,
             enable_shared_glyph_extraction=False,
             global_glyph_asset_path=global_glyph_asset_path,
             global_glyph_map_path=global_glyph_map_path,

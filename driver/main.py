@@ -74,7 +74,7 @@ def _add_command_parsers(subparsers: argparse._SubParsersAction) -> None:
 
     subparsers.add_parser(
         "update",
-        help="Update the content page and sitemap.",
+        help="Update the content page, sitemap, and RSS feed.",
     )
     upload_parser = subparsers.add_parser(
         "upload", help="Upload the generated root directory to Google Cloud Storage"
@@ -131,7 +131,7 @@ def _build_parser() -> ArgumentParser:
     parser.add_argument(
         "--base-url",
         default=None,
-        help="Base URL for the sitemap. Overrides config.",
+        help="Base URL for the sitemap and RSS feed. Overrides config.",
     )
     parser.add_argument(
         "--config",

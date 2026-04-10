@@ -23,14 +23,15 @@ python3 driver/main.py compile my-post
 # publish to root/posts/YYYY-MM-DD/my-post/
 python3 driver/main.py submit my-post
 
-# rebuild root/index.html + root/sitemap.xml
+# rebuild root/index.html + root/sitemap.xml + root/rss.xml
 python3 driver/main.py update
 ```
 
 ## Useful commands
 ```bash
-python3 driver/main.py recover my-post --force
 python3 driver/main.py amend-all
+python3 driver/main.py serve --port 8000
+python3 driver/main.py recover my-post --force
 python3 driver/main.py upload --config config.json
 ```
 

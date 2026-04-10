@@ -131,6 +131,7 @@ def _compile_initial_post_html(
     stylesheet_asset_path: str,
     clipboard_asset_path: str,
     theme_asset_path: str,
+    rss_feed_path: Optional[str],
     enable_shared_glyph_extraction: bool,
     global_glyph_asset_path: Optional[str] = None,
     global_glyph_map_path: Optional[str] = None,
@@ -163,6 +164,7 @@ def _compile_initial_post_html(
         stylesheet_asset_path=stylesheet_asset_path,
         clipboard_asset_path=clipboard_asset_path,
         theme_asset_path=theme_asset_path,
+        rss_feed_path=rss_feed_path,
         enable_shared_glyph_extraction=enable_shared_glyph_extraction,
         global_glyph_asset_path=global_glyph_asset_path,
         global_glyph_map_path=global_glyph_map_path,
@@ -254,6 +256,9 @@ def run_compile(args: Namespace) -> None:
         enable_shared_glyph_extraction = bool(
             getattr(args, "enable_shared_glyph_extraction", True)
         )
+        rss_feed_path: Optional[str] = None
+        if output_dir_override is not None:
+            rss_feed_path = os.path.join(args.root_dir, "rss.xml")
         initial_hidden_text = _compile_initial_post_html(
             output_dir=output_dir,
             base_dir=base_dir,
@@ -270,6 +275,7 @@ def run_compile(args: Namespace) -> None:
             stylesheet_asset_path=asset_context.web_assets.stylesheet_path,
             clipboard_asset_path=asset_context.web_assets.clipboard_script_path,
             theme_asset_path=asset_context.web_assets.theme_script_path,
+            rss_feed_path=rss_feed_path,
             enable_shared_glyph_extraction=enable_shared_glyph_extraction,
             global_glyph_asset_path=asset_context.global_glyph_asset_path,
             global_glyph_map_path=asset_context.global_glyph_map_path,

@@ -2248,6 +2248,7 @@ def build_html_from_svgs(
     stylesheet_asset_path: Optional[str] = None,
     clipboard_asset_path: Optional[str] = None,
     theme_asset_path: Optional[str] = None,
+    rss_feed_path: Optional[str] = None,
     glyph_scope_key: Optional[str] = None,
     enable_shared_glyph_extraction: bool = True,
     global_glyph_asset_path: Optional[str] = None,
@@ -2366,6 +2367,17 @@ def build_html_from_svgs(
         "{{CLIPBOARD_SRC}}", html.escape(clipboard_src)
     )
     index_content = index_content.replace("{{THEME_SRC}}", html.escape(theme_src))
+    rss_feed_link = ""
+    if rss_feed_path:
+        rss_feed_href = build_relative_href(
+            os.path.dirname(index_path),
+            rss_feed_path,
+        )
+        rss_feed_link = (
+            '<link rel="alternate" type="application/rss+xml" '
+            f'title="RSS Feed" href="{html.escape(rss_feed_href)}">'
+        )
+    index_content = index_content.replace("{{RSS_FEED_LINK}}", rss_feed_link)
 
     glyph_preload_html = ""
     if glyph_asset_path is not None:
@@ -2424,6 +2436,7 @@ def compile_and_build_html(
     stylesheet_asset_path: Optional[str] = None,
     clipboard_asset_path: Optional[str] = None,
     theme_asset_path: Optional[str] = None,
+    rss_feed_path: Optional[str] = None,
     glyph_scope_key: Optional[str] = None,
     enable_shared_glyph_extraction: bool = True,
     global_glyph_asset_path: Optional[str] = None,
@@ -2471,6 +2484,7 @@ def compile_and_build_html(
         stylesheet_asset_path=stylesheet_asset_path,
         clipboard_asset_path=clipboard_asset_path,
         theme_asset_path=theme_asset_path,
+        rss_feed_path=rss_feed_path,
         glyph_scope_key=glyph_scope_key or svg_name_prefix,
         enable_shared_glyph_extraction=enable_shared_glyph_extraction,
         global_glyph_asset_path=global_glyph_asset_path,

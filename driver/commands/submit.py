@@ -112,6 +112,7 @@ def _submit_to_destination(
             workspace_files=workspace_files,
             global_glyph_asset_path=asset_context.global_glyph_asset_path,
             global_glyph_map_path=asset_context.global_glyph_map_path,
+            rss_feed_path=os.path.join(args.root_dir, "rss.xml"),
         )
 
         rewrite_stylesheet_href(

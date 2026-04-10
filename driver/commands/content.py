@@ -2,7 +2,8 @@ import html
 import os
 import re
 from argparse import Namespace
-from typing import Any, Dict, List
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
 
 from .shared import (
     build_driver_asset_context,
@@ -28,6 +29,10 @@ def _extract_post_title(main_typ_path: str, fallback: str) -> str:
     return extract_declared_typst_string(main_typ_path, "title") or fallback
 
 
+def _extract_post_subtitle(main_typ_path: str) -> Optional[str]:
+    return extract_declared_typst_string(main_typ_path, "subtitle")
+
+
 def _append_revision_suffix(post_dir_name: str, title: str) -> str:
     rev_match = _REVISION_SUFFIX_PATTERN.search(post_dir_name)
     if not rev_match:
@@ -42,17 +47,21 @@ def _collect_day_posts(date_dir: str, date_str: str) -> List[PostEntry]:
         if not os.path.isdir(post_path):
             continue
 
+        main_typ_path = os.path.join(post_path, "source", "main.typ")
         title = _extract_post_title(
-            os.path.join(post_path, "source", "main.typ"),
+            main_typ_path,
             fallback=post_dir_name,
         )
         title = _append_revision_suffix(post_dir_name, title)
+        subtitle = _extract_post_subtitle(main_typ_path)
 
         day_posts.append(
             {
                 "name": title,
+                "subtitle": subtitle,
                 "link": f"./posts/{date_str}/{post_dir_name}/index.html",
                 "time": os.path.getmtime(post_path),
+                "date": date_str,
             }
         )
 
@@ -115,6 +124,73 @@ def _build_sitemap_lines(base_url: str, posts_by_date: PostsByDate) -> List[str]
 
     sitemap_lines.append("</urlset>")
     return sitemap_lines
+
+
+def _build_post_permalink(base_url: str, post_link: str) -> str:
+    rel_link_clean = post_link.lstrip("./")
+    if rel_link_clean.endswith("index.html"):
+        rel_link_clean = rel_link_clean[:-10]
+    return f"{base_url}/{rel_link_clean}"
+
+
+def _format_rss_pub_date(date_str: str) -> str:
+    parsed = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    return parsed.strftime("%a, %d %b %Y %H:%M:%S +0000")
+
+
+def _build_rss_lines(
+    base_url: str,
+    site_title: str,
+    site_description: str,
+    posts_by_date: PostsByDate,
+) -> List[str]:
+    feed_url = f"{base_url}/rss.xml"
+    rss_lines = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">',
+        "  <channel>",
+        f"    <title>{html.escape(site_title, quote=False)}</title>",
+        f"    <link>{html.escape(base_url + '/', quote=False)}</link>",
+        f"    <description>{html.escape(site_description, quote=False)}</description>",
+        "    <language>en-us</language>",
+        f'    <atom:link href="{html.escape(feed_url)}" rel="self" type="application/rss+xml" />',
+    ]
+
+    all_posts: List[PostEntry] = []
+    for day_posts in posts_by_date.values():
+        all_posts.extend(day_posts)
+
+    if all_posts:
+        rss_lines.append(
+            f"    <lastBuildDate>{_format_rss_pub_date(str(all_posts[0]['date']))}</lastBuildDate>"
+        )
+    else:
+        rss_lines.append(
+            "    <lastBuildDate>"
+            f"{datetime.now(timezone.utc).strftime('%a, %d %b %Y %H:%M:%S +0000')}"
+            "</lastBuildDate>"
+        )
+
+    for post in all_posts:
+        post_url = _build_post_permalink(base_url, str(post["link"]))
+        item_description = str(
+            post["subtitle"] if post["subtitle"] is not None else post["name"]
+        )
+        rss_lines.extend(
+            [
+                "    <item>",
+                f"      <title>{html.escape(str(post['name']), quote=False)}</title>",
+                f"      <link>{html.escape(post_url, quote=False)}</link>",
+                f'      <guid isPermaLink="true">{html.escape(post_url, quote=False)}</guid>',
+                f"      <pubDate>{_format_rss_pub_date(str(post['date']))}</pubDate>",
+                "      <description>"
+                f"{html.escape(item_description, quote=False)}</description>",
+                "    </item>",
+            ]
+        )
+
+    rss_lines.extend(["  </channel>", "</rss>"])
+    return rss_lines
 
 
 def update_content(args: Namespace) -> None:
@@ -192,6 +268,7 @@ def update_content(args: Namespace) -> None:
         stylesheet_asset_path=asset_context.web_assets.stylesheet_path,
         clipboard_asset_path=asset_context.web_assets.clipboard_script_path,
         theme_asset_path=asset_context.web_assets.theme_script_path,
+        rss_feed_path=os.path.join(root_dir, "rss.xml"),
         global_glyph_asset_path=asset_context.global_glyph_asset_path,
         global_glyph_map_path=asset_context.global_glyph_map_path,
     )
@@ -227,10 +304,20 @@ def update_content(args: Namespace) -> None:
         base_url_raw = "https://owo.li/blog/"
     base_url = str(base_url_raw).rstrip("/")
     sitemap_lines = _build_sitemap_lines(base_url, posts_by_date)
+    rss_lines = _build_rss_lines(
+        base_url=base_url,
+        site_title=parsed_title,
+        site_description=parsed_subtitle,
+        posts_by_date=posts_by_date,
+    )
 
     sitemap_path = os.path.join(root_dir, "sitemap.xml")
     with open(sitemap_path, "w", encoding="utf-8") as f:
         f.write("\n".join(sitemap_lines))
+    rss_path = os.path.join(root_dir, "rss.xml")
+    with open(rss_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(rss_lines))
 
     print(f"Content page updated in {root_dir}.")
     print(f"Sitemap generated at {sitemap_path}.")
+    print(f"RSS feed generated at {rss_path}.")
