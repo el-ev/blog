@@ -78,6 +78,23 @@ def _build_typst_inputs(
     return input_values_svg, input_values_pdf
 
 
+def _workspace_latest_modified_date(workspace_path: str) -> str:
+    latest_mtime: Optional[float] = None
+    for root, _, files in os.walk(workspace_path):
+        for filename in files:
+            file_path = os.path.join(root, filename)
+            mtime = os.path.getmtime(file_path)
+            if latest_mtime is None or mtime > latest_mtime:
+                latest_mtime = mtime
+
+    if latest_mtime is None:
+        raise RuntimeError(
+            f"Workspace '{workspace_path}' does not contain any files."
+        )
+
+    return datetime.fromtimestamp(latest_mtime).strftime("%Y-%m-%d")
+
+
 def _prepare_compile_sources(
     base_dir: str, workspace_path: str
 ) -> Tuple[bytes, str, str]:
@@ -215,7 +232,7 @@ def run_compile(args: Namespace) -> None:
         if skip_latest:
             edited_date = getattr(
                 args, "edited_date_override", None
-            ) or datetime.now().strftime("%Y-%m-%d")
+            ) or _workspace_latest_modified_date(workspace_path)
         last_revision_date, last_revision_url = find_latest_revision(
             posts_dir,
             workspace_name,
