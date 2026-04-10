@@ -43,3 +43,7 @@ This deploys to GCS. You may ignore it and upload `root/` to anywhere you like.
 - `root/`: published static site
 
 Start from `config.example.json` for deploy settings; keep `config.json` private.
+
+## License
+
+Code in this repository is licensed under the MIT License. Articles under `root/` are All Rights Reserved.
