@@ -1,6 +1,5 @@
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 import os
-import shutil
 import sys
 from argparse import Namespace
 from datetime import datetime
@@ -25,6 +24,7 @@ from .submission_workspace import (
     collect_relative_files,
     load_manifest_data,
     resolve_existing_post_metadata,
+    sync_snapshot_from_workspace,
     stage_workspace_if_needed,
     write_workspace_manifest,
 )
@@ -71,9 +71,7 @@ def _submit_to_destination(
         asset_context = build_driver_asset_context(base_dir, args.root_dir)
 
         source_dest_dir = os.path.join(dest_dir, "source")
-        if os.path.exists(source_dest_dir):
-            shutil.rmtree(source_dest_dir)
-        shutil.copytree(staged_workspace_path, source_dest_dir)
+        sync_snapshot_from_workspace(staged_workspace_path, source_dest_dir)
 
         post_title, post_subtitle = extract_post_headers(
             os.path.join(staged_workspace_path, "main.typ"),

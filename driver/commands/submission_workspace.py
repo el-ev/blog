@@ -68,6 +68,60 @@ def collect_relative_files(base_dir: str) -> List[str]:
     return normalize_relative_paths(file_paths)
 
 
+def _collect_relative_directories(base_dir: str) -> List[str]:
+    directories: List[str] = []
+    for root, dirs, _ in os.walk(base_dir):
+        rel_root = os.path.relpath(root, start=base_dir).replace("\\", "/")
+        if rel_root == ".":
+            rel_root = ""
+        directories.append(rel_root)
+        for directory in dirs:
+            rel_dir = os.path.join(rel_root, directory).replace("\\", "/")
+            directories.append(rel_dir)
+    normalized = normalize_relative_paths(directories)
+    return [""] + normalized
+
+
+def sync_snapshot_from_workspace(workspace_path: str, source_dest_dir: str) -> None:
+    workspace_files = collect_relative_files(workspace_path)
+    os.makedirs(source_dest_dir, exist_ok=True)
+
+    workspace_file_set = set(workspace_files)
+    existing_source_files = collect_relative_files(source_dest_dir)
+    for rel_path in existing_source_files:
+        if rel_path in workspace_file_set:
+            continue
+        stale_path = safe_join_child(source_dest_dir, rel_path)
+        os.remove(stale_path)
+
+    for rel_path in workspace_files:
+        src_path = safe_join_child(workspace_path, rel_path)
+        dst_path = safe_join_child(source_dest_dir, rel_path)
+        os.makedirs(os.path.dirname(dst_path), exist_ok=True)
+        shutil.copy2(src_path, dst_path)
+
+    for root, _, _ in os.walk(source_dest_dir, topdown=False):
+        if root == source_dest_dir:
+            continue
+        try:
+            os.rmdir(root)
+        except OSError:
+            continue
+
+    workspace_dirs = _collect_relative_directories(workspace_path)
+    for rel_dir in workspace_dirs:
+        src_dir = (
+            workspace_path if rel_dir == "" else safe_join_child(workspace_path, rel_dir)
+        )
+        dst_dir = (
+            source_dest_dir
+            if rel_dir == ""
+            else safe_join_child(source_dest_dir, rel_dir)
+        )
+        os.makedirs(dst_dir, exist_ok=True)
+        shutil.copystat(src_dir, dst_dir)
+
+
 def write_workspace_manifest(
     manifest_path: str,
     workspace_name: str,
