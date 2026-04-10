@@ -15,7 +15,7 @@
     [
       #set text(size: 10pt, fill: luma(100))
       #align(right)[
-        #link("../../../index.html")[Contents] | #link("post.pdf")[PDF] | #link("source/index.html")[Source] | #link("meta.html")[Meta]
+        #nav_link("../../../index.html", [Contents]) | #nav_link("meta.html", [Meta]) | #nav_link("post.pdf", [PDF]) | #a11y_action("theme", [Theme], label: "Theme")
       ]
     ],
   )

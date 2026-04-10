@@ -5,7 +5,6 @@ from argparse import Namespace
 
 from .utils import (
     WORKSPACE_PUBLIC_DIR_NAME,
-    validate_workspace_name,
     safe_join_child,
 )
 
@@ -18,11 +17,7 @@ def run_init(args: Namespace) -> None:
         print(f"Template directory '{template_dir}' does not exist.", file=sys.stderr)
         sys.exit(1)
         
-    try:
-        workspace_name = validate_workspace_name(args.name[0])
-    except ValueError as e:
-        print(f"Invalid workspace name: {e}", file=sys.stderr)
-        sys.exit(1)
+    workspace_name: str = args.name
 
     workspace_path = safe_join_child(workspace_base, workspace_name)
     

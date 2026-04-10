@@ -1,37 +1,48 @@
-import os
-import sys
 import argparse
+import os
 from argparse import ArgumentParser, BooleanOptionalAction, Namespace
 
 from commands.init import run_init
 from commands.compile import run_compile
 from commands.submit import run_submit, run_amend_all
-from commands.update import update_content as run_update
+from commands.update import run_update
 from commands.upload import run_upload
 from commands.recover import run_recover
+from commands.utils import validate_workspace_name
+
+
+def _parse_workspace_name(value: str) -> str:
+    try:
+        return validate_workspace_name(value)
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(str(e)) from e
 
 
 def _add_command_parsers(subparsers: argparse._SubParsersAction) -> None:
-    init_parser = ArgumentParser(add_help=False)
-    init_parser.add_argument(
-        "name",
-        nargs=1,
+    init_parser = subparsers.add_parser(
+        "init",
         help="Create a new post draft with the specified workspace name.",
     )
-    subparsers.add_parser("init", parents=[init_parser], add_help=False)
+    init_parser.add_argument("name", type=_parse_workspace_name)
 
-    compile_parser = ArgumentParser(add_help=False)
-    compile_parser.add_argument(
-        "name",
-        nargs=1,
+    compile_parser = subparsers.add_parser(
+        "compile",
         help="Name of the workspace to be compiled.",
     )
-    subparsers.add_parser("compile", parents=[compile_parser], add_help=False)
-
-    submit_parser = ArgumentParser(add_help=False)
-    submit_parser.add_argument(
-        "name", nargs=1, help="Name of the workspace to be submitted."
+    compile_parser.add_argument("name", type=_parse_workspace_name)
+    compile_parser.add_argument(
+        "--amend",
+        action=BooleanOptionalAction,
+        help="If set, compile with amend metadata for latest-revision links.",
+        default=False,
+        dest="amend",
     )
+
+    submit_parser = subparsers.add_parser(
+        "submit",
+        help="Name of the workspace to be submitted.",
+    )
+    submit_parser.add_argument("name", type=_parse_workspace_name)
     submit_parser.add_argument(
         "--amend",
         action=BooleanOptionalAction,
@@ -39,17 +50,18 @@ def _add_command_parsers(subparsers: argparse._SubParsersAction) -> None:
         default=False,
         dest="amend",
     )
-    subparsers.add_parser("submit", parents=[submit_parser], add_help=False)
     subparsers.add_parser(
         "amend-all",
         help="Amend the latest published revision of every workspace using its bundled source snapshot.",
     )
 
-    recover_parser = ArgumentParser(add_help=False)
+    recover_parser = subparsers.add_parser(
+        "recover",
+        help="Name of the workspace to recover from the latest post source snapshot.",
+    )
     recover_parser.add_argument(
         "name",
-        nargs=1,
-        help="Name of the workspace to recover from the latest post source snapshot.",
+        type=_parse_workspace_name,
     )
     recover_parser.add_argument(
         "--force",
@@ -58,16 +70,18 @@ def _add_command_parsers(subparsers: argparse._SubParsersAction) -> None:
         help="If set, remove an existing local workspace before recovery.",
         dest="force",
     )
-    subparsers.add_parser("recover", parents=[recover_parser], add_help=False)
 
-    update_parser = subparsers.add_parser(
-        "update", help="Update the auxiliary files like the content list and sitemap."
+    subparsers.add_parser(
+        "update",
+        help="Update the content page and sitemap.",
     )
     upload_parser = subparsers.add_parser(
         "upload", help="Upload the generated root directory to Google Cloud Storage"
     )
     upload_parser.add_argument(
-        "--bucket", required=False, help="Name of the GCS bucket to upload the content to. Overrides config."
+        "--bucket",
+        required=False,
+        help="Name of the GCS bucket to upload the content to. Overrides config.",
     )
     upload_parser.add_argument(
         "--prefix",
@@ -92,25 +106,21 @@ def _build_parser() -> ArgumentParser:
     base_dir = os.path.dirname(os.path.abspath(__file__))
     current_cwd = os.getcwd()
 
-    parser.add_argument(
-        "--template-dir", default=os.path.join(base_dir, "template")
-    )
+    parser.add_argument("--template-dir", default=os.path.join(base_dir, "template"))
     parser.add_argument(
         "--workspace-base", default=os.path.join(current_cwd, "workspace")
     )
+    parser.add_argument("--build-base", default=os.path.join(current_cwd, "build"))
+    parser.add_argument("--root-dir", default=os.path.join(current_cwd, "root"))
     parser.add_argument(
-        "--build-base", default=os.path.join(current_cwd, "build")
-    )
-    parser.add_argument(
-        "--root-dir", default=os.path.join(current_cwd, "root")
-    )
-    parser.add_argument(
-        "--base-url", default=None,
+        "--base-url",
+        default=None,
         help="Base URL for the sitemap. Overrides config.",
     )
     parser.add_argument(
-        "--config", default=os.path.join(current_cwd, "config.json"),
-        help="Path to a JSON config file."
+        "--config",
+        default=os.path.join(current_cwd, "config.json"),
+        help="Path to a JSON config file.",
     )
     return parser
 
@@ -128,12 +138,7 @@ def main() -> None:
         "update": run_update,
         "upload": run_upload,
     }
-    handler = command_handlers.get(str(args.command))
-    if handler is None:
-        print(f"Unknown command: {args.command}", file=sys.stderr)
-        sys.exit(1)
-        
-    handler(args)
+    command_handlers[str(args.command)](args)
 
 
 if __name__ == "__main__":

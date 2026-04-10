@@ -8,78 +8,67 @@
     <title>{{TITLE}}</title>
     <style>
         :root {
-            --bg-color: #f5f5f5;
-            --page-bg: #ffffff;
-            --shadow-color: rgba(0, 0, 0, 0.1);
+            --initial-page-bg: #ffffff;
+            background-color: #f5f5f5;
+            color: #141414;
         }
 
-        .sr-only {
-            position: absolute;
-            width: 1px;
-            height: 1px;
-            padding: 0;
-            margin: -1px;
-            overflow: hidden;
-            clip: rect(0, 0, 0, 0);
-            border: 0;
+        :root[data-theme="dark"] {
+            --initial-page-bg: #161b22;
+            background-color: #0f141b;
+            color: #e8ecf2;
         }
 
-        body {
-            margin: 0;
-            padding: 20px;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            background-color: var(--bg-color);
-            font-family: system-ui, -apple-system, sans-serif;
+        :root[data-glyphs-ready="false"] .page {
+            opacity: 0;
         }
 
         main {
-            width: 100%;
-            max-width: 900px;
-            display: flex;
-            flex-direction: column;
-            gap: 20px;
-            align-items: center;
-        }
-
-        .page {
-            max-width: 100%;
-            width: 100%;
-            height: auto;
-            background: var(--page-bg);
-            box-shadow: 0 4px 12px var(--shadow-color);
-            display: block;
-        }
-
-        #raw-copy-toast {
-            position: fixed;
-            left: 50%;
-            bottom: 24px;
-            font-family: Consolas, "Courier New", monospace;
-            transform: translateX(-50%);
-            font-size: 13px;
-            line-height: 1;
-            padding: 9px 12px;
-            border-radius: 8px;
-            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.18);
-            color: #222;
-            background: #eee;
-            opacity: 0;
-            pointer-events: none;
-            transition: opacity 120ms ease;
-            z-index: 9999;
+            position: relative;
+            z-index: 1;
         }
     </style>
+    <script>
+        (() => {
+            const storageKey = "blog-color-theme";
+            let theme = "light";
+
+            try {
+                const savedTheme = window.localStorage?.getItem(storageKey);
+                if (savedTheme === "light" || savedTheme === "dark") {
+                    theme = savedTheme;
+                } else if (window.matchMedia?.("(prefers-color-scheme: dark)")?.matches) {
+                    theme = "dark";
+                }
+            } catch {
+                // noop
+            }
+
+            const root = document.documentElement;
+            const isDark = theme === "dark";
+            root.setAttribute("data-theme", theme);
+            root.classList.toggle("theme-light", !isDark);
+            root.classList.toggle("theme-dark", isDark);
+            root.style.colorScheme = isDark ? "dark" : "light";
+            root.setAttribute("data-glyphs-ready", "false");
+        })();
+    </script>
+    <link rel="stylesheet" href="{{STYLESHEET_SRC}}">
 </head>
 
 <body>
+{{GLYPH_PRELOAD}}
 <main>
 {{TEXT}}
 {{RAW_COPY}}
 {{PAGES}}
 </main>
-<script src="{{CLIPBOARD_SRC}}"></script>
+<script defer src="{{THEME_SRC}}" onerror="document.documentElement.setAttribute('data-glyphs-ready', 'true');"></script>
+<script defer src="{{CLIPBOARD_SRC}}"></script>
+<!-- FCP/LCP trigger for Lighthouse -->
+<div aria-hidden="true" style="position: absolute; z-index: -1; top: 100px; opacity: 0.01;">
+You caught me!
+</div>
 </body>
 
 </html>

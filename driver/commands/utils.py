@@ -7,23 +7,166 @@ import subprocess
 import sys
 import json
 import tempfile
-from typing import Optional, List, Tuple, Dict, Set, Union
-from typing import Any
+from urllib.parse import unquote, urlparse
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, TypeVar, Union
+
+from .revisions import list_workspace_revisions
 
 
 _typst_path: Optional[str] = None
+_typst_version: Optional[str] = None
+_svgo_path: Optional[str] = None
+_svgo_path_checked = False
+_svgo_missing_warned = False
 _WORKSPACE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _TYPST_DECLARED_STRING_PATTERN_TEMPLATE = r'#let\s+{name}\s*=\s*"([^"]*)"'
+_ASSET_HASH_LENGTH = 6
+_RAW_COPY_ID_HASH_LENGTH = 10
 WORKSPACE_PUBLIC_DIR_NAME = "public"
+WEB_ASSETS_DIR_NAME = "assets"
 _SVGO_CONFIG_PATH = os.path.join(
     os.path.dirname(os.path.dirname(__file__)),
     "svgo.config.mjs",
 )
+_SVGO_GLYPH_CONFIG_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)),
+    "svgo.glyphs.config.mjs",
+)
+_GLOBAL_GLYPH_MAP_VERSION = 1
+GLOBAL_GLYPH_ASSET_FILENAME = "glyphs.svg"
+GLOBAL_GLYPH_MAP_FILENAME = "glyph-map.json"
+_SVG_THEME_FILL_CLASS_MAP: Dict[str, str] = {
+    "#fff": "theme-paper-bg",
+    "#ffffff": "theme-paper-bg",
+    "#000": "t",
+    "#000000": "t",
+    "black": "t",
+    "#141414": "t",
+    "#646464": "theme-muted-text",
+    "#aaa": "theme-footer-text",
+    "#aaaaaa": "theme-footer-text",
+    "#f5f5f5": "theme-code-bg",
+    "#f8f8f8": "theme-surface-bg",
+    "#74747c": "theme-code-comment",
+    "#198810": "theme-code-green",
+    "#1d6c76": "theme-code-dark-green",
+    "#d73948": "theme-code-red",
+    "#4b69c6": "theme-code-blue",
+    "#b60157": "theme-code-magenta",
+}
+_SVG_THEME_STROKE_CLASS_MAP: Dict[str, str] = {
+    "#000": "theme-muted-stroke",
+    "#000000": "theme-muted-stroke",
+    "black": "theme-muted-stroke",
+    "#141414": "t-stroke",
+    "#646464": "theme-muted-stroke",
+    "#787878": "theme-code-gutter",
+}
+_SVG_THEME_STYLE = """
+<style id="driver-theme-style">
+.theme-paper-bg { fill: var(--svg-paper-bg, #ffffff) !important; }
+.t { fill: var(--svg-text, #141414) !important; }
+.theme-muted-text { fill: var(--svg-muted-text, #646464) !important; }
+.theme-footer-text { fill: var(--svg-footer-text, #aaaaaa) !important; }
+.theme-code-bg { fill: var(--svg-code-bg, #f5f5f5) !important; }
+.theme-surface-bg { fill: var(--svg-surface-bg, #f8f8f8) !important; }
+.theme-code-comment { fill: var(--svg-code-comment, #74747c) !important; }
+.theme-code-green { fill: var(--svg-code-green, #198810) !important; }
+.theme-code-dark-green { fill: var(--svg-code-dark-green, #1d6c76) !important; }
+.theme-code-red { fill: var(--svg-code-red, #d73948) !important; }
+.theme-code-blue { fill: var(--svg-code-blue, #4b69c6) !important; }
+.theme-code-magenta { fill: var(--svg-code-magenta, #b60157) !important; }
+.t-stroke { stroke: var(--svg-text, #141414) !important; }
+.theme-muted-stroke { stroke: var(--svg-muted-stroke, #646464) !important; }
+.theme-code-gutter { stroke: var(--svg-code-gutter, #787878) !important; }
+a:focus,
+a:focus-visible {
+  outline: none;
+}
+a:focus-visible > path {
+  fill: transparent !important;
+  stroke: var(--svg-focus-ring, #4b69c6) !important;
+  stroke-width: 1.2 !important;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+@media (forced-colors: active) {
+  a:focus-visible > path {
+    stroke: CanvasText !important;
+  }
+}
+</style>
+""".strip()
+
+
+@dataclass(frozen=True)
+class DriverWebAssets:
+    stylesheet_path: str
+    clipboard_script_path: str
+    theme_script_path: str
+
+
+def _append_svg_class(attrs: str, class_name: str) -> str:
+    class_match = re.search(r'\sclass="([^"]*)"', attrs)
+    if class_match:
+        class_names = [name for name in class_match.group(1).split() if name]
+        if class_name not in class_names:
+            class_names.append(class_name)
+        replacement = f' class="{" ".join(class_names)}"'
+        return attrs[: class_match.start()] + replacement + attrs[class_match.end() :]
+    if re.search(r"/\s*$", attrs):
+        return re.sub(r"/\s*$", f' class="{class_name}" /', attrs)
+    return f'{attrs} class="{class_name}"'
+
+
+def _inject_svg_theme_classes(svg_data: str) -> str:
+    def _rewrite_tag(match: re.Match) -> str:
+        tag = match.group(1)
+        attrs = match.group(2)
+        if not attrs:
+            return match.group(0)
+
+        classes: List[str] = []
+
+        fill_match = re.search(r'\sfill="([^"]+)"', attrs, flags=re.IGNORECASE)
+        if fill_match:
+            fill_value = fill_match.group(1).strip().lower()
+            if fill_value in _SVG_THEME_FILL_CLASS_MAP:
+                classes.append(_SVG_THEME_FILL_CLASS_MAP[fill_value])
+
+        stroke_match = re.search(r'\sstroke="([^"]+)"', attrs, flags=re.IGNORECASE)
+        if stroke_match:
+            stroke_value = stroke_match.group(1).strip().lower()
+            if stroke_value in _SVG_THEME_STROKE_CLASS_MAP:
+                classes.append(_SVG_THEME_STROKE_CLASS_MAP[stroke_value])
+
+        if not classes:
+            return match.group(0)
+
+        updated_attrs = attrs
+        for class_name in classes:
+            updated_attrs = _append_svg_class(updated_attrs, class_name)
+        return f"<{tag}{updated_attrs}>"
+
+    return re.sub(r"<([A-Za-z][\w:.-]*)([^>]*)>", _rewrite_tag, svg_data)
+
+
+def _inject_svg_theme_style(svg_data: str) -> str:
+    if 'id="driver-theme-style"' in svg_data:
+        return svg_data
+    return re.sub(
+        r"(<svg\b[^>]*>)",
+        rf"\1{_SVG_THEME_STYLE}",
+        svg_data,
+        count=1,
+    )
 
 
 def make_raw_copy_id(text: str) -> str:
-    digest = hashlib.sha1(text.encode("utf-8")).hexdigest()[:10]
-    return f"raw-copy-{digest}"
+    digest = hashlib.sha1(text.encode("utf-8")).hexdigest()[:_RAW_COPY_ID_HASH_LENGTH]
+    return f"{digest}"
 
 
 def _resolve_typst_path() -> str:
@@ -34,6 +177,83 @@ def _resolve_typst_path() -> str:
         print("Typst executable not found in PATH.")
         sys.exit(1)
     return _typst_path
+
+
+def _resolve_typst_version() -> str:
+    global _typst_version
+    if _typst_version is not None:
+        return _typst_version
+
+    typst_path = _resolve_typst_path()
+    result = subprocess.run(
+        [typst_path, "--version"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    version = result.stdout.strip()
+    if not version:
+        raise RuntimeError("Failed to resolve Typst version.")
+
+    _typst_version = version
+    return _typst_version
+
+
+def _resolve_svgo_path() -> Optional[str]:
+    global _svgo_path, _svgo_path_checked
+    if not _svgo_path_checked:
+        _svgo_path = shutil.which("svgo") or shutil.which("svgo.cmd")
+        _svgo_path_checked = True
+    return _svgo_path
+
+
+def _run_svgo(svg_path: str, preserve_ids: bool = False) -> None:
+    global _svgo_missing_warned
+
+    svgo_path = _resolve_svgo_path()
+    if not svgo_path:
+        if not _svgo_missing_warned:
+            print("SVGO not found, skipping SVG optimization.", file=sys.stderr)
+            _svgo_missing_warned = True
+        return
+
+    config_path = _SVGO_GLYPH_CONFIG_PATH if preserve_ids else _SVGO_CONFIG_PATH
+    command = [
+        svgo_path,
+        svg_path,
+        "-o",
+        svg_path,
+        "--multipass",
+        "--precision",
+        "2",
+    ]
+    if os.path.isfile(config_path):
+        command.extend(["--config", config_path])
+
+    try:
+        subprocess.run(command, check=True, capture_output=True)
+    except subprocess.CalledProcessError as e:
+        print(
+            f"Aggressive SVGO failed for {svg_path}; retrying with defaults.",
+            file=sys.stderr,
+        )
+        if e.stderr:
+            print(e.stderr.decode("utf-8"), file=sys.stderr)
+
+        fallback_command = [svgo_path, svg_path, "-o", svg_path]
+        if preserve_ids and os.path.isfile(_SVGO_GLYPH_CONFIG_PATH):
+            fallback_command.extend(["--config", _SVGO_GLYPH_CONFIG_PATH])
+
+        try:
+            subprocess.run(
+                fallback_command,
+                check=True,
+                capture_output=True,
+            )
+        except subprocess.CalledProcessError as fallback_error:
+            print(f"SVGO failed for {svg_path}", file=sys.stderr)
+            if fallback_error.stderr:
+                print(fallback_error.stderr.decode("utf-8"), file=sys.stderr)
 
 
 def reset_directory(path: str) -> None:
@@ -74,12 +294,16 @@ def build_relative_href(from_dir: str, target_path: str) -> str:
 
 
 def extract_declared_typst_string_from_source(source: str, name: str) -> Optional[str]:
-    pattern = re.compile(_TYPST_DECLARED_STRING_PATTERN_TEMPLATE.format(name=re.escape(name)))
+    pattern = re.compile(
+        _TYPST_DECLARED_STRING_PATTERN_TEMPLATE.format(name=re.escape(name))
+    )
     match = pattern.search(source)
     if not match:
         return None
     value = match.group(1).strip()
-    return value or None
+    if not value:
+        return None
+    return value
 
 
 def extract_declared_typst_string(path: str, name: str) -> Optional[str]:
@@ -88,29 +312,145 @@ def extract_declared_typst_string(path: str, name: str) -> Optional[str]:
     try:
         with open(path, "r", encoding="utf-8") as f:
             return extract_declared_typst_string_from_source(f.read(), name)
-    except Exception:
+    except (OSError, UnicodeDecodeError):
         return None
 
 
-def copy_driver_web_js(driver_dir: str, webroot_dir: str) -> int:
-    if not os.path.isdir(driver_dir):
+def _remove_stale_hashed_assets(
+    asset_dir: str,
+    prefix: str,
+    suffix: str,
+    keep_filename: str,
+) -> None:
+    if not os.path.isdir(asset_dir):
+        return
+
+    expected_prefix = f"{prefix}."
+    for filename in os.listdir(asset_dir):
+        if filename == keep_filename:
+            continue
+        if not filename.startswith(expected_prefix) or not filename.endswith(suffix):
+            continue
+
+        stale_path = os.path.join(asset_dir, filename)
+        if os.path.isfile(stale_path):
+            os.remove(stale_path)
+
+
+def _write_hashed_asset(
+    asset_dir: str,
+    prefix: str,
+    suffix: str,
+    content: str,
+    remove_stale: bool = True,
+) -> str:
+    payload = content.encode("utf-8")
+    digest = hashlib.sha256(payload).hexdigest()[:_ASSET_HASH_LENGTH]
+    filename = f"{prefix}.{digest}{suffix}"
+    asset_path = safe_join_child(asset_dir, filename)
+
+    with open(asset_path, "w", encoding="utf-8") as f:
+        f.write(content)
+
+    if remove_stale:
+        _remove_stale_hashed_assets(
+            asset_dir=asset_dir,
+            prefix=prefix,
+            suffix=suffix,
+            keep_filename=filename,
+        )
+    return asset_path
+
+
+def _minify_js_source(source: str) -> str:
+    terser_path = shutil.which("terser") or shutil.which("terser.cmd")
+    if not terser_path:
+        raise RuntimeError(
+            "JavaScript minification requires `terser` on PATH. "
+            "Install it with `npm install --global terser`."
+        )
+
+    try:
+        result = subprocess.run(
+            [terser_path, "--compress", "--mangle", "--ecma", "2020"],
+            check=True,
+            input=source,
+            text=True,
+            capture_output=True,
+        )
+    except subprocess.CalledProcessError as e:
+        stderr = e.stderr.strip() if e.stderr else ""
+        if stderr:
+            raise RuntimeError(f"Terser minification failed: {stderr}") from e
+        raise RuntimeError("Terser minification failed.") from e
+
+    minified = result.stdout.strip()
+    if not minified:
+        raise RuntimeError("Terser minification produced empty output.")
+    return minified
+
+
+def _remove_legacy_root_js_files(webroot_dir: str) -> int:
+    if not os.path.isdir(webroot_dir):
         return 0
 
+    removed_count = 0
+    for filename in os.listdir(webroot_dir):
+        if not re.fullmatch(r"(?:clipboard|theme)(?:\.[^.]+)?(?:\.min)?\.js", filename):
+            continue
+        target_path = os.path.join(webroot_dir, filename)
+        if os.path.isfile(target_path):
+            os.remove(target_path)
+            removed_count += 1
+    return removed_count
+
+
+def build_driver_web_assets(driver_dir: str, webroot_dir: str) -> DriverWebAssets:
+    if not os.path.isdir(driver_dir):
+        raise FileNotFoundError(driver_dir)
+
     os.makedirs(webroot_dir, exist_ok=True)
-    copied_count = 0
-    for filename in sorted(os.listdir(driver_dir)):
-        if not filename.endswith(".js"):
-            continue
+    assets_dir = safe_join_child(webroot_dir, WEB_ASSETS_DIR_NAME)
+    os.makedirs(assets_dir, exist_ok=True)
 
-        src_path = os.path.join(driver_dir, filename)
-        if not os.path.isfile(src_path):
-            continue
+    stylesheet_src_path = os.path.join(driver_dir, "site.css")
+    clipboard_src_path = os.path.join(driver_dir, "clipboard.js")
+    theme_src_path = os.path.join(driver_dir, "theme.js")
 
-        dst_path = safe_join_child(webroot_dir, filename)
-        shutil.copy2(src_path, dst_path)
-        copied_count += 1
+    with open(stylesheet_src_path, "r", encoding="utf-8") as f:
+        stylesheet_source = f.read().strip() + "\n"
+    with open(clipboard_src_path, "r", encoding="utf-8") as f:
+        clipboard_source = f.read()
+    with open(theme_src_path, "r", encoding="utf-8") as f:
+        theme_source = f.read()
 
-    return copied_count
+    stylesheet_asset_path = _write_hashed_asset(
+        asset_dir=assets_dir,
+        prefix="site",
+        suffix=".css",
+        content=stylesheet_source,
+    )
+    clipboard_asset_path = _write_hashed_asset(
+        asset_dir=assets_dir,
+        prefix="clipboard",
+        suffix=".min.js",
+        content=_minify_js_source(clipboard_source),
+    )
+    theme_asset_path = _write_hashed_asset(
+        asset_dir=assets_dir,
+        prefix="theme",
+        suffix=".min.js",
+        content=_minify_js_source(theme_source),
+    )
+
+    web_assets = DriverWebAssets(
+        stylesheet_path=stylesheet_asset_path,
+        clipboard_script_path=clipboard_asset_path,
+        theme_script_path=theme_asset_path,
+    )
+
+    _remove_legacy_root_js_files(webroot_dir)
+    return web_assets
 
 
 def run_typst_compile(
@@ -118,6 +458,7 @@ def run_typst_compile(
     output_path: str,
     export_format: str,
     inputs: Optional[Dict[str, str]] = None,
+    creation_timestamp: Optional[str] = None,
 ) -> None:
     command = [
         _resolve_typst_path(),
@@ -130,6 +471,8 @@ def run_typst_compile(
     if inputs:
         for key, value in inputs.items():
             command.extend(["--input", f"{key}={value}"])
+    if creation_timestamp:
+        command.extend(["--creation-timestamp", creation_timestamp])
 
     try:
         subprocess.run(
@@ -138,12 +481,37 @@ def run_typst_compile(
             input=source_bytes,
         )
     except subprocess.CalledProcessError as e:
-        print(f"Typst compilation failed for {output_path} (exit code {e.returncode})", file=sys.stderr)
+        print(
+            f"Typst compilation failed for {output_path} (exit code {e.returncode})",
+            file=sys.stderr,
+        )
         if e.stderr:
             print(e.stderr.decode("utf-8"), file=sys.stderr)
         elif e.output:
             print(e.output.decode("utf-8"), file=sys.stderr)
         raise RuntimeError(f"Typst compilation failed. Exit code {e.returncode}") from e
+
+
+def _resolve_creation_timestamp(inputs: Optional[Dict[str, str]]) -> Optional[str]:
+    if not inputs:
+        return None
+
+    raw_date: Optional[str]
+    if "edited_date" in inputs:
+        raw_date = inputs["edited_date"]
+    elif "publish_date" in inputs:
+        raw_date = inputs["publish_date"]
+    else:
+        raw_date = None
+    if not raw_date:
+        return None
+
+    try:
+        parsed_date = datetime.strptime(raw_date, "%Y-%m-%d")
+    except ValueError:
+        return None
+
+    return str(int(parsed_date.replace(tzinfo=timezone.utc).timestamp()))
 
 
 def _flatten_query_text(node: Any) -> str:
@@ -152,18 +520,92 @@ def _flatten_query_text(node: Any) -> str:
     if isinstance(node, list):
         return "".join(_flatten_query_text(item) for item in node)
     if isinstance(node, dict):
+        func = node["func"] if "func" in node else None
+        if func == "space":
+            return " "
+        if func == "linebreak":
+            return "\n"
+        if func == "smartquote":
+            return '"' if ("double" in node and bool(node["double"])) else "'"
+
         parts: List[str] = []
-        text = node.get("text")
+        text = node["text"] if "text" in node else None
         if isinstance(text, str):
             parts.append(text)
         for key in ("body", "children", "child", "value", "values", "content"):
             if key in node:
                 parts.append(_flatten_query_text(node[key]))
         if not parts:
-            for value in node.values():
-                parts.append(_flatten_query_text(value))
+            for key, value in node.items():
+                if key in ("func", "text"):
+                    continue
+                if isinstance(value, (dict, list)):
+                    parts.append(_flatten_query_text(value))
         return "".join(parts)
     return ""
+
+
+def _query_typst_json_nodes(
+    main_typ_path: str,
+    query_root: str,
+    selector: str,
+    query_label: str,
+    parse_label: str,
+    inputs: Optional[Dict[str, str]] = None,
+) -> List[Dict[str, Any]]:
+    abs_main_typ = os.path.abspath(main_typ_path)
+    abs_query_root = os.path.abspath(query_root)
+    query_input = os.path.relpath(abs_main_typ, start=abs_query_root).replace("\\", "/")
+
+    command = [
+        _resolve_typst_path(),
+        "query",
+        query_input,
+        selector,
+        "--root",
+        abs_query_root,
+        "--format",
+        "json",
+    ]
+    if inputs:
+        for key, value in inputs.items():
+            command.extend(["--input", f"{key}={value}"])
+
+    try:
+        result = subprocess.run(
+            command,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as e:
+        stderr = e.stderr.strip() if e.stderr else ""
+        if stderr:
+            raise RuntimeError(
+                f"Failed to query {query_label} from Typst source: {stderr}"
+            ) from e
+        raise RuntimeError(
+            f"Failed to query {query_label} from Typst source: {e}"
+        ) from e
+
+    raw = result.stdout.strip()
+    if not raw:
+        raise RuntimeError(f"Typst query produced empty output for {query_label}.")
+
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise RuntimeError(f"Failed to parse {parse_label}: {e}") from e
+
+    if not isinstance(data, list):
+        raise RuntimeError(f"Invalid {parse_label}: expected list root.")
+
+    nodes: List[Dict[str, Any]] = []
+    for item in data:
+        if not isinstance(item, dict):
+            raise RuntimeError(f"Invalid {parse_label}: expected object entries.")
+        nodes.append(item)
+    return nodes
 
 
 def extract_typst_links(
@@ -173,60 +615,23 @@ def extract_typst_links(
 ) -> List[Tuple[str, str]]:
     links: List[Tuple[str, str]] = []
     seen: Set[str] = set()
-
-    abs_main_typ = os.path.abspath(main_typ_path)
-    abs_query_root = os.path.abspath(query_root)
-    query_input = os.path.relpath(abs_main_typ, start=abs_query_root).replace("\\", "/")
-
-    command = [
-        _resolve_typst_path(),
-        "query",
-        query_input,
-        "link",
-        "--root",
-        abs_query_root,
-        "--format",
-        "json",
-    ]
-    if inputs:
-        for key, value in inputs.items():
-            command.extend(["--input", f"{key}={value}"])
-
-    try:
-        result = subprocess.run(
-            command,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except subprocess.CalledProcessError as e:
-        print(f"Failed to query links from Typst source: {e}", file=sys.stderr)
-        stderr = (e.stderr or "").strip()
-        if stderr:
-            print(stderr, file=sys.stderr)
-        return links
-
-    raw = result.stdout.strip()
-    if not raw:
-        return links
-
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError as e:
-        print(f"Failed to parse Typst query output: {e}", file=sys.stderr)
-        return links
-
-    if not isinstance(data, list):
-        return links
-
-    for item in data:
-        if not isinstance(item, dict):
-            continue
-        href = item.get("dest")
-        if not isinstance(href, str) or not href or href in seen:
+    for item in _query_typst_json_nodes(
+        main_typ_path=main_typ_path,
+        query_root=query_root,
+        selector="link",
+        query_label="links",
+        parse_label="Typst query output",
+        inputs=inputs,
+    ):
+        href = item["dest"]
+        if not isinstance(href, str):
+            raise RuntimeError(
+                "Invalid Typst link query output: 'dest' must be string."
+            )
+        if not href or href in seen:
             continue
 
-        label = re.sub(r"\s+", " ", _flatten_query_text(item.get("body"))).strip()
+        label = re.sub(r"\s+", " ", _flatten_query_text(item["body"])).strip()
         if not label:
             label = href
 
@@ -236,82 +641,218 @@ def extract_typst_links(
     return links
 
 
+def extract_typst_headings(
+    main_typ_path: str,
+    query_root: str,
+    inputs: Optional[Dict[str, str]] = None,
+) -> List[Tuple[int, str]]:
+    headings: List[Tuple[int, str]] = []
+    for item in _query_typst_json_nodes(
+        main_typ_path=main_typ_path,
+        query_root=query_root,
+        selector="heading",
+        query_label="headings",
+        parse_label="Typst heading query output",
+        inputs=inputs,
+    ):
+        level = item["level"]
+        if not isinstance(level, int):
+            raise RuntimeError(
+                "Invalid Typst heading query output: 'level' must be int."
+            )
+        text = re.sub(r"\s+", " ", _flatten_query_text(item["body"])).strip()
+        if not text:
+            continue
+        headings.append((level, text))
+
+    return headings
+
+
 def extract_typst_raws(
     main_typ_path: str,
     query_root: str,
     inputs: Optional[Dict[str, str]] = None,
 ) -> List[Tuple[str, bool]]:
     raws: List[Tuple[str, bool]] = []
-
-    abs_main_typ = os.path.abspath(main_typ_path)
-    abs_query_root = os.path.abspath(query_root)
-    query_input = os.path.relpath(abs_main_typ, start=abs_query_root).replace("\\", "/")
-
-    command = [
-        _resolve_typst_path(),
-        "query",
-        query_input,
-        "raw",
-        "--root",
-        abs_query_root,
-        "--format",
-        "json",
-    ]
-    if inputs:
-        for key, value in inputs.items():
-            command.extend(["--input", f"{key}={value}"])
-
-    try:
-        result = subprocess.run(
-            command,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except subprocess.CalledProcessError as e:
-        print(f"Failed to query raw elements from Typst source: {e}", file=sys.stderr)
-        stderr = (e.stderr or "").strip()
-        if stderr:
-            print(stderr, file=sys.stderr)
-        return raws
-
-    raw = result.stdout.strip()
-    if not raw:
-        return raws
-
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError as e:
-        print(f"Failed to parse Typst raw query output: {e}", file=sys.stderr)
-        return raws
-
-    if not isinstance(data, list):
-        return raws
-
-    for item in data:
-        if not isinstance(item, dict):
-            continue
-        text = item.get("text")
+    for item in _query_typst_json_nodes(
+        main_typ_path=main_typ_path,
+        query_root=query_root,
+        selector="raw",
+        query_label="raw elements",
+        parse_label="Typst raw query output",
+        inputs=inputs,
+    ):
+        text = item["text"]
         if not isinstance(text, str):
-            continue
-        is_block = bool(item.get("block", False))
-        raws.append((text, is_block))
-
+            raise RuntimeError("Invalid Typst raw query output: 'text' must be string.")
+        block = item["block"]
+        raws.append((text, bool(block)))
     return raws
 
 
-def extract_typst_raws_from_content(
-    source_content: Union[str, bytes],
+def _extract_typst_table_rows(
+    table_payload: Dict[str, Any],
+) -> List[List[Dict[str, Any]]]:
+    columns_raw = table_payload["columns"]
+    if isinstance(columns_raw, list):
+        column_count = len(columns_raw)
+    elif isinstance(columns_raw, int):
+        column_count = columns_raw
+    else:
+        raise RuntimeError(
+            "Invalid Typst table query output: 'columns' must be list or int."
+        )
+    if column_count <= 0:
+        raise RuntimeError("Invalid Typst table query output: table must have columns.")
+
+    children = table_payload["children"]
+    if not isinstance(children, list):
+        raise RuntimeError("Invalid Typst table query output: 'children' must be list.")
+
+    cell_nodes: List[Dict[str, Any]] = []
+    for child in children:
+        if not isinstance(child, dict):
+            raise RuntimeError(
+                "Invalid Typst table query output: table child entry must be object."
+            )
+        if child.get("func") != "cell":
+            continue
+
+        body = child["body"]
+        text = re.sub(r"\s+", " ", _flatten_query_text(body)).strip()
+        is_inline_code = bool(
+            isinstance(body, dict)
+            and body.get("func") == "raw"
+            and not bool(body.get("block", False))
+        )
+
+        colspan = child.get("colspan", 1)
+        if not isinstance(colspan, int) or colspan <= 0:
+            raise RuntimeError(
+                "Invalid Typst table query output: 'colspan' must be positive int."
+            )
+        rowspan = child.get("rowspan", 1)
+        if not isinstance(rowspan, int) or rowspan <= 0:
+            raise RuntimeError(
+                "Invalid Typst table query output: 'rowspan' must be positive int."
+            )
+        if colspan > column_count:
+            raise RuntimeError(
+                "Invalid Typst table query output: cell colspan exceeds column count."
+            )
+
+        cell_nodes.append(
+            {
+                "text": text,
+                "is_inline_code": is_inline_code,
+                "colspan": colspan,
+                "rowspan": rowspan,
+            }
+        )
+
+    rows: List[List[Dict[str, Any]]] = [[]]
+    occupied: Dict[Tuple[int, int], bool] = {}
+    row_index = 0
+    col_index = 0
+
+    def advance_to_free_slot(start_row: int, start_col: int) -> Tuple[int, int]:
+        current_row = start_row
+        current_col = start_col
+        while True:
+            while current_col < column_count and occupied.get(
+                (current_row, current_col), False
+            ):
+                current_col += 1
+            if current_col < column_count:
+                return current_row, current_col
+            current_row += 1
+            current_col = 0
+            while current_row >= len(rows):
+                rows.append([])
+
+    for cell in cell_nodes:
+        row_index, col_index = advance_to_free_slot(row_index, col_index)
+        while row_index >= len(rows):
+            rows.append([])
+
+        rowspan = int(cell["rowspan"])
+        colspan = int(cell["colspan"])
+
+        rows[row_index].append(cell)
+        for row_offset in range(rowspan):
+            target_row = row_index + row_offset
+            while target_row >= len(rows):
+                rows.append([])
+            for col_offset in range(colspan):
+                target_col = col_index + col_offset
+                if target_col >= column_count:
+                    raise RuntimeError(
+                        "Invalid Typst table query output: cell span exceeds table width."
+                    )
+                slot_key = (target_row, target_col)
+                if occupied.get(slot_key, False):
+                    raise RuntimeError(
+                        "Invalid Typst table query output: overlapping table spans."
+                    )
+                occupied[slot_key] = True
+
+        col_index += colspan
+
+    if occupied:
+        row_count = max(row for row, _ in occupied.keys()) + 1
+        while len(rows) < row_count:
+            rows.append([])
+        if len(rows) > row_count:
+            rows = rows[:row_count]
+
+    return rows
+
+
+def extract_typst_tables(
+    main_typ_path: str,
     query_root: str,
     inputs: Optional[Dict[str, str]] = None,
-) -> List[Tuple[str, bool]]:
+) -> List[Dict[str, Any]]:
+    tables: List[Dict[str, Any]] = []
+    for item in _query_typst_json_nodes(
+        main_typ_path=main_typ_path,
+        query_root=query_root,
+        selector="table",
+        query_label="tables",
+        parse_label="Typst table query output",
+        inputs=inputs,
+    ):
+        if item.get("func") != "table":
+            raise RuntimeError(
+                "Invalid Typst table query output: node func must be 'table'."
+            )
+
+        tables.append(
+            {
+                "rows": _extract_typst_table_rows(item),
+            }
+        )
+
+    return tables
+
+
+_ExtractResult = TypeVar("_ExtractResult")
+
+
+def _extract_typst_from_content(
+    source_content: Union[str, bytes],
+    query_root: str,
+    query_prefix: str,
+    extractor: Callable[[str, str, Optional[Dict[str, str]]], List[_ExtractResult]],
+    inputs: Optional[Dict[str, str]] = None,
+) -> List[_ExtractResult]:
     temp_query_path = ""
     try:
         if isinstance(source_content, bytes):
             with tempfile.NamedTemporaryFile(
                 mode="wb",
                 suffix=".typ",
-                prefix=".raw-query-",
+                prefix=query_prefix,
                 dir=query_root,
                 delete=False,
             ) as temp_file:
@@ -321,7 +862,7 @@ def extract_typst_raws_from_content(
             with tempfile.NamedTemporaryFile(
                 mode="w",
                 suffix=".typ",
-                prefix=".raw-query-",
+                prefix=query_prefix,
                 dir=query_root,
                 delete=False,
                 encoding="utf-8",
@@ -329,63 +870,135 @@ def extract_typst_raws_from_content(
                 temp_file.write(source_content)
                 temp_query_path = temp_file.name
 
-        return extract_typst_raws(
-            temp_query_path,
-            query_root=query_root,
-            inputs=inputs,
-        )
+        return extractor(temp_query_path, query_root, inputs)
     finally:
         if temp_query_path and os.path.exists(temp_query_path):
             os.remove(temp_query_path)
 
 
-def build_raw_copy_assets(raw_entries: List[Tuple[str, bool]]) -> str:
-    raw_copy_ids = [make_raw_copy_id(text) for text, _ in raw_entries]
+def extract_typst_raws_from_content(
+    source_content: Union[str, bytes],
+    query_root: str,
+    inputs: Optional[Dict[str, str]] = None,
+) -> List[Tuple[str, bool]]:
+    return _extract_typst_from_content(
+        source_content=source_content,
+        query_root=query_root,
+        query_prefix=".raw-query-",
+        extractor=extract_typst_raws,
+        inputs=inputs,
+    )
+
+
+def extract_typst_headings_from_content(
+    source_content: Union[str, bytes],
+    query_root: str,
+    inputs: Optional[Dict[str, str]] = None,
+) -> List[Tuple[int, str]]:
+    return _extract_typst_from_content(
+        source_content=source_content,
+        query_root=query_root,
+        query_prefix=".heading-query-",
+        extractor=extract_typst_headings,
+        inputs=inputs,
+    )
+
+
+def extract_typst_tables_from_content(
+    source_content: Union[str, bytes],
+    query_root: str,
+    inputs: Optional[Dict[str, str]] = None,
+) -> List[Dict[str, Any]]:
+    return _extract_typst_from_content(
+        source_content=source_content,
+        query_root=query_root,
+        query_prefix=".table-query-",
+        extractor=extract_typst_tables,
+        inputs=inputs,
+    )
+
+
+def build_raw_copy_assets(
+    raw_entries: List[Tuple[str, bool]],
+    asset_dir: Optional[str] = None,
+) -> str:
+    block_raw_entries = [(text, block) for text, block in raw_entries if block]
+    if not block_raw_entries:
+        return ""
+
+    raw_copy_ids = [make_raw_copy_id(text) for text, _ in block_raw_entries]
     raw_texts = {
         raw_copy_id: text
-        for raw_copy_id, (text, _) in zip(raw_copy_ids, raw_entries)
+        for raw_copy_id, (text, _) in zip(raw_copy_ids, block_raw_entries)
     }
     json_payload = json.dumps(raw_texts, ensure_ascii=False).replace("</", "<\\/")
-    raw_copy_html = (
-        f'<script id="raw-copy-data" type="application/json">{json_payload}</script>'
+
+    if not asset_dir:
+        return f'<script id="copy-data" type="application/json">{json_payload}</script>'
+
+    os.makedirs(asset_dir, exist_ok=True)
+    payload_bytes = json_payload.encode("utf-8")
+    payload_hash = hashlib.sha256(payload_bytes).hexdigest()[:_ASSET_HASH_LENGTH]
+    asset_name = f"copy.{payload_hash}.json"
+    asset_path = os.path.join(asset_dir, asset_name)
+
+    with open(asset_path, "w", encoding="utf-8") as f:
+        f.write(json_payload)
+
+    return (
+        '<script id="copy-data" type="application/json" '
+        f'data-src="./{html.escape(asset_name, quote=True)}"></script>'
     )
-    return raw_copy_html
 
 
-def _collect_typ_files(paths: List[str]) -> List[str]:
-    typ_files: List[str] = []
+def _collect_typ_files(paths: List[str]) -> List[Tuple[str, str]]:
+    typ_files: Dict[str, str] = {}
 
-    for path in paths:
+    for path_index, path in enumerate(paths):
         if not path:
             continue
-        if os.path.isfile(path) and path.endswith(".typ"):
-            typ_files.append(os.path.abspath(path))
-            continue
-        if os.path.isdir(path):
-            for root, _, files in os.walk(path):
-                for name in files:
-                    if name.endswith(".typ"):
-                        typ_files.append(os.path.abspath(os.path.join(root, name)))
+        abs_path = os.path.abspath(path)
+        logical_prefix = f"{path_index}:"
 
-    return sorted(set(typ_files))
+        if os.path.isfile(abs_path) and abs_path.endswith(".typ"):
+            logical_path = f"{logical_prefix}{os.path.basename(abs_path)}"
+            typ_files.setdefault(logical_path, abs_path)
+            continue
+
+        if os.path.isdir(abs_path):
+            for root, _, files in os.walk(abs_path):
+                for name in files:
+                    if not name.endswith(".typ"):
+                        continue
+                    file_path = os.path.abspath(os.path.join(root, name))
+                    rel_path = os.path.relpath(file_path, start=abs_path).replace(
+                        "\\", "/"
+                    )
+                    logical_path = f"{logical_prefix}{rel_path}"
+                    typ_files.setdefault(logical_path, file_path)
+
+    return sorted(typ_files.items(), key=lambda item: item[0])
 
 
 def _update_hash_with_typ_files(hasher: "hashlib._Hash", paths: List[str]) -> None:
     typ_files = _collect_typ_files(paths)
-    for file_path in typ_files:
-        rel_path = os.path.relpath(file_path, start=os.getcwd()).replace("\\", "/")
-        hasher.update(rel_path.encode("utf-8"))
+    for logical_path, file_path in typ_files:
+        hasher.update(logical_path.encode("utf-8"))
         with open(file_path, "rb") as f:
             hasher.update(f.read())
 
 
-def sources_hash(paths: List[str], length: int = 6) -> str:
+def sources_hash(paths: List[str], length: int = _ASSET_HASH_LENGTH) -> str:
     hasher = hashlib.sha256()
     _update_hash_with_typ_files(hasher, paths)
     return hasher.hexdigest()[:length]
 
 
-def hash_text_with_sources(text: str, paths: List[str], length: int = 6) -> str:
+def hash_text_with_sources(
+    text: str,
+    paths: List[str],
+    length: int = _ASSET_HASH_LENGTH,
+) -> str:
     hasher = hashlib.sha256()
     hasher.update(text.encode("utf-8"))
     _update_hash_with_typ_files(hasher, paths)
@@ -400,43 +1013,150 @@ def extract_pdf_text(
 ) -> Tuple[str, str]:
     title: str = default_title
     hidden_text: str = ""
-    try:
-        import pymupdf
-        from typing import cast, Any
-        
-        if os.path.exists(pdf_path):
-            doc = pymupdf.open(pdf_path)
-            doc_any = cast(Any, doc)
-            raw_text = "".join(page.get_text() for page in doc_any)
-            if extract_title:
-                lines = raw_text.strip().split("\n")
-                if lines:
-                    title = lines[0].strip()
-            hidden_text = f'<div class="sr-only">\n{html.escape(raw_text)}\n</div>'
-    except Exception as e:
-        print(f"Failed to extract text from PDF: {e}", file=sys.stderr)
+    import pymupdf
+    from typing import cast, Any
+
+    if os.path.exists(pdf_path):
+        doc = pymupdf.open(pdf_path)
+        doc_any = cast(Any, doc)
+        raw_text = "".join(page.get_text() for page in doc_any)
+        if extract_title:
+            lines = raw_text.strip().split("\n")
+            if lines:
+                title = lines[0].strip()
+        hidden_text = f'<div class="sr-only">\n{html.escape(raw_text)}\n</div>'
     return title, hidden_text
 
 
-def rewrite_clipboard_script_src(html_path: str, clipboard_asset_path: str) -> bool:
+def rewrite_script_src(html_path: str, script_asset_path: str) -> bool:
     if not os.path.isfile(html_path):
+        return False
+
+    script_name = os.path.basename(script_asset_path)
+    if not script_name:
         return False
 
     with open(html_path, "r", encoding="utf-8") as f:
         html_content = f.read()
 
-    clipboard_src = build_relative_href(
+    script_src = build_relative_href(
         os.path.dirname(html_path),
-        clipboard_asset_path,
+        script_asset_path,
     )
     updated_html = re.sub(
-        r'(<script\s+src=")[^"]*clipboard\.min\.js(")',
-        rf"\1{clipboard_src}\2",
+        rf'(<script[^>]*\ssrc=")[^"]*{re.escape(script_name)}(")',
+        rf"\1{script_src}\2",
         html_content,
         count=1,
     )
     if updated_html == html_content:
         return False
+
+    with open(html_path, "w", encoding="utf-8") as f:
+        f.write(updated_html)
+    return True
+
+
+def rewrite_stylesheet_href(html_path: str, stylesheet_asset_path: str) -> bool:
+    if not os.path.isfile(html_path):
+        return False
+
+    stylesheet_name = os.path.basename(stylesheet_asset_path)
+    if not stylesheet_name:
+        return False
+
+    with open(html_path, "r", encoding="utf-8") as f:
+        html_content = f.read()
+
+    stylesheet_href = build_relative_href(
+        os.path.dirname(html_path),
+        stylesheet_asset_path,
+    )
+    updated_html = re.sub(
+        rf'(<link[^>]*\shref=")[^"]*{re.escape(stylesheet_name)}(")',
+        rf"\1{stylesheet_href}\2",
+        html_content,
+        count=1,
+    )
+    if updated_html == html_content:
+        return False
+
+    with open(html_path, "w", encoding="utf-8") as f:
+        f.write(updated_html)
+    return True
+
+
+def _extract_first_glyph_symbol_id(glyph_asset_path: str) -> Optional[str]:
+    if not os.path.isfile(glyph_asset_path):
+        return None
+
+    try:
+        with open(glyph_asset_path, "r", encoding="utf-8") as f:
+            glyph_content = f.read()
+    except (OSError, UnicodeDecodeError):
+        return None
+
+    symbol_match = _SVG_SYMBOL_PATTERN.search(glyph_content)
+    if not symbol_match:
+        return None
+
+    symbol_attrs = symbol_match.group(1)
+    symbol_id_match = _SVG_ID_ATTR_PATTERN.search(symbol_attrs)
+    if not symbol_id_match:
+        return None
+
+    symbol_id = symbol_id_match.group(1).strip()
+    if not symbol_id:
+        return None
+    return symbol_id
+
+
+def _build_glyph_preload_svg(glyph_src: str, glyph_symbol_id: str) -> str:
+    glyph_ref = f"{glyph_src}#{glyph_symbol_id}"
+    return (
+        '<svg data-glyph-preload="true" aria-hidden="true" width="0" height="0" '
+        'style="position:absolute;opacity:0;pointer-events:none">'
+        f'<use href="{html.escape(glyph_ref, quote=True)}"></use>'
+        "</svg>"
+    )
+
+
+def rewrite_glyph_preload_href(html_path: str, glyph_asset_path: str) -> bool:
+    if not os.path.isfile(html_path):
+        return False
+
+    glyph_name = os.path.basename(glyph_asset_path)
+    if not glyph_name:
+        return False
+
+    with open(html_path, "r", encoding="utf-8") as f:
+        html_content = f.read()
+
+    glyph_src = build_relative_href(
+        os.path.dirname(html_path),
+        glyph_asset_path,
+    )
+    glyph_symbol_id = _extract_first_glyph_symbol_id(glyph_asset_path)
+    if glyph_symbol_id is None:
+        return False
+    glyph_ref = html.escape(f"{glyph_src}#{glyph_symbol_id}", quote=True)
+
+    updated_html = _GLYPH_PRELOAD_USE_HREF_PATTERN.sub(
+        lambda match: f"{match.group(1)}{glyph_ref}{match.group(2)}",
+        html_content,
+        count=1,
+    )
+    if updated_html == html_content:
+        if _GLYPH_PRELOAD_SVG_PATTERN.search(html_content):
+            return False
+        body_match = _HTML_BODY_OPEN_TAG_PATTERN.search(html_content)
+        if body_match is None:
+            return False
+        preload_svg = _build_glyph_preload_svg(glyph_src, glyph_symbol_id)
+        insert_at = body_match.end()
+        updated_html = (
+            f"{html_content[:insert_at]}\n{preload_svg}\n{html_content[insert_at:]}"
+        )
 
     with open(html_path, "w", encoding="utf-8") as f:
         f.write(updated_html)
@@ -452,20 +1172,982 @@ def _is_generated_svg(filename: str, svg_name_prefix: str = "page") -> bool:
     )
 
 
+_SVG_DEFS_PATTERN = re.compile(r"<defs>(.*?)</defs>", flags=re.DOTALL)
+_SVG_SYMBOL_PATTERN = re.compile(r"<symbol\b([^>]*)>(.*?)</symbol>", flags=re.DOTALL)
+_SVG_ID_ATTR_PATTERN = re.compile(r'\s+id="([^"]+)"')
+_SVG_WHITESPACE_PATTERN = re.compile(r"\s+")
+_SVG_EXTERNAL_GLYPH_REF_PATTERN = re.compile(
+    r"(?:xlink:)?href\s*=\s*['\"][^'\"]*glyphs(?:[-.][^'\"#?]*)?\.svg(?:\?[^'\"#]*)?(?:#[^'\"]+)?['\"]",
+    flags=re.IGNORECASE,
+)
+_HTML_BODY_OPEN_TAG_PATTERN = re.compile(r"<body\b[^>]*>", flags=re.IGNORECASE)
+_GLYPH_PRELOAD_SVG_PATTERN = re.compile(
+    r"<svg\b(?=[^>]*\bdata-glyph-preload\s*=\s*['\"]true['\"])[^>]*>.*?</svg>",
+    flags=re.IGNORECASE | re.DOTALL,
+)
+_GLYPH_PRELOAD_USE_HREF_PATTERN = re.compile(
+    r"(<svg\b(?=[^>]*\bdata-glyph-preload\s*=\s*['\"]true['\"])[^>]*>.*?<use\b[^>]*\b(?:xlink:)?href\s*=\s*['\"])[^'\"]*(['\"])",
+    flags=re.IGNORECASE | re.DOTALL,
+)
+
+
+def _sanitize_asset_prefix_component(value: str) -> str:
+    sanitized = re.sub(r"[^A-Za-z0-9-]+", "-", value.strip().lower())
+    sanitized = re.sub(r"-+", "-", sanitized).strip("-")
+    return sanitized
+
+
+def _to_base36(value: int) -> str:
+    if value <= 0:
+        return "0"
+
+    digits = "0123456789abcdefghijklmnopqrstuvwxyz"
+    output: List[str] = []
+    current = value
+    while current:
+        current, remainder = divmod(current, 36)
+        output.append(digits[remainder])
+    return "".join(reversed(output))
+
+
+def _canonical_symbol_fingerprint(attrs_without_id: str, body: str) -> str:
+    normalized_attrs = _SVG_WHITESPACE_PATTERN.sub(" ", attrs_without_id).strip()
+    normalized_body = body.strip()
+    if normalized_attrs:
+        return f"<symbol {normalized_attrs}>{normalized_body}</symbol>"
+    return f"<symbol>{normalized_body}</symbol>"
+
+
+def _short_id_to_index(short_id: str) -> int:
+    if not short_id.startswith("g"):
+        return 0
+
+    raw = short_id[1:]
+    if not raw:
+        return 0
+
+    try:
+        return int(raw, 36)
+    except ValueError:
+        return 0
+
+
+def _load_global_glyph_registry(map_path: str) -> Dict[str, Any]:
+    current_typst_version = _resolve_typst_version()
+    default_registry: Dict[str, Any] = {
+        "version": _GLOBAL_GLYPH_MAP_VERSION,
+        "typst_version": current_typst_version,
+        "next_short_index": 1,
+        "symbols": {},
+        "fingerprint_to_short": {},
+        "typst_id_to_short": {},
+    }
+
+    if not os.path.isfile(map_path):
+        return default_registry
+
+    with open(map_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    if not isinstance(data, dict):
+        raise RuntimeError("Invalid glyph map payload: expected object root.")
+
+    symbols_raw = data["symbols"]
+    fingerprint_to_short_raw = data["fingerprint_to_short"]
+    typst_id_to_short_raw = data["typst_id_to_short"]
+    next_short_index = data["next_short_index"]
+    version = data["version"]
+
+    if not isinstance(symbols_raw, dict):
+        raise RuntimeError("Invalid glyph map payload: 'symbols' must be object.")
+    if not isinstance(fingerprint_to_short_raw, dict):
+        raise RuntimeError(
+            "Invalid glyph map payload: 'fingerprint_to_short' must be object."
+        )
+    if not isinstance(typst_id_to_short_raw, dict):
+        raise RuntimeError(
+            "Invalid glyph map payload: 'typst_id_to_short' must be object."
+        )
+    if not isinstance(next_short_index, int) or next_short_index <= 0:
+        raise RuntimeError(
+            "Invalid glyph map payload: 'next_short_index' must be positive integer."
+        )
+    if not isinstance(version, int):
+        raise RuntimeError("Invalid glyph map payload: 'version' must be integer.")
+
+    symbols: Dict[str, Dict[str, str]] = {}
+    for short_id, payload in symbols_raw.items():
+        if not isinstance(short_id, str) or not isinstance(payload, dict):
+            raise RuntimeError("Invalid glyph map payload: malformed symbol entry.")
+
+        fingerprint = payload["fingerprint"]
+        attrs = payload["attrs"]
+        body = payload["body"]
+        if not isinstance(fingerprint, str):
+            raise RuntimeError("Invalid glyph map payload: symbol fingerprint invalid.")
+        if not isinstance(attrs, str) or not isinstance(body, str):
+            raise RuntimeError("Invalid glyph map payload: symbol body/attrs invalid.")
+        if _SVG_EXTERNAL_GLYPH_REF_PATTERN.search(body):
+            raise RuntimeError("Invalid glyph map payload: external glyph refs found.")
+        symbols[short_id] = {
+            "fingerprint": fingerprint,
+            "attrs": attrs,
+            "body": body,
+        }
+
+    fingerprint_to_short: Dict[str, str] = {}
+    for fingerprint, short_id in fingerprint_to_short_raw.items():
+        if not isinstance(fingerprint, str) or not isinstance(short_id, str):
+            raise RuntimeError(
+                "Invalid glyph map payload: malformed fingerprint_to_short entry."
+            )
+        if short_id not in symbols:
+            raise RuntimeError(
+                "Invalid glyph map payload: fingerprint_to_short references unknown symbol."
+            )
+        fingerprint_to_short[fingerprint] = short_id
+
+    typst_id_to_short: Dict[str, str] = {}
+    for typst_id, short_id in typst_id_to_short_raw.items():
+        if not isinstance(typst_id, str) or not isinstance(short_id, str):
+            raise RuntimeError(
+                "Invalid glyph map payload: malformed typst_id_to_short entry."
+            )
+        if short_id not in symbols:
+            raise RuntimeError(
+                "Invalid glyph map payload: typst_id_to_short references unknown symbol."
+            )
+        typst_id_to_short[typst_id] = short_id
+
+    return {
+        "version": version,
+        "typst_version": current_typst_version,
+        "next_short_index": next_short_index,
+        "symbols": symbols,
+        "fingerprint_to_short": fingerprint_to_short,
+        "typst_id_to_short": typst_id_to_short,
+    }
+
+
+def _allocate_next_short_id(registry: Dict[str, Any]) -> str:
+    next_short_index = registry["next_short_index"]
+    if not isinstance(next_short_index, int) or next_short_index <= 0:
+        raise RuntimeError(
+            "Invalid glyph registry: 'next_short_index' must be integer."
+        )
+
+    short_id = f"g{_to_base36(next_short_index)}"
+    registry["next_short_index"] = next_short_index + 1
+    return short_id
+
+
+def _resolve_global_short_id(
+    registry: Dict[str, Any],
+    typst_id: str,
+    fingerprint: str,
+    attrs_without_id: str,
+    body: str,
+) -> str:
+    symbols: Dict[str, Dict[str, str]] = registry["symbols"]
+    typst_id_to_short: Dict[str, str] = registry["typst_id_to_short"]
+    fingerprint_to_short: Dict[str, str] = registry["fingerprint_to_short"]
+
+    typst_version = str(registry["typst_version"])
+    scoped_typst_id = f"{typst_version}::{typst_id}"
+
+    chosen_short_id: Optional[str] = None
+
+    mapped_short_id: Optional[str]
+    if scoped_typst_id in typst_id_to_short:
+        mapped_short_id = typst_id_to_short[scoped_typst_id]
+    elif typst_id in typst_id_to_short:
+        mapped_short_id = typst_id_to_short[typst_id]
+    else:
+        mapped_short_id = None
+    if mapped_short_id:
+        mapped_symbol = symbols[mapped_short_id] if mapped_short_id in symbols else None
+        if mapped_symbol and mapped_symbol["fingerprint"] == fingerprint:
+            chosen_short_id = mapped_short_id
+
+    if chosen_short_id is None:
+        mapped_short_id = (
+            fingerprint_to_short[fingerprint]
+            if fingerprint in fingerprint_to_short
+            else None
+        )
+        if mapped_short_id and mapped_short_id in symbols:
+            chosen_short_id = mapped_short_id
+
+    if chosen_short_id is None:
+        chosen_short_id = _allocate_next_short_id(registry)
+
+    existing_symbol = symbols[chosen_short_id] if chosen_short_id in symbols else None
+    if existing_symbol is None:
+        symbols[chosen_short_id] = {
+            "fingerprint": fingerprint,
+            "attrs": attrs_without_id,
+            "body": body,
+        }
+    elif existing_symbol["fingerprint"] != fingerprint:
+        chosen_short_id = _allocate_next_short_id(registry)
+        symbols[chosen_short_id] = {
+            "fingerprint": fingerprint,
+            "attrs": attrs_without_id,
+            "body": body,
+        }
+
+    typst_id_to_short[scoped_typst_id] = chosen_short_id
+    fingerprint_to_short[fingerprint] = chosen_short_id
+
+    return chosen_short_id
+
+
+def _render_glyph_svg(symbols: Dict[str, Dict[str, str]]) -> str:
+    ordered_short_ids = sorted(symbols.keys(), key=_short_id_to_index)
+    glyph_symbols: List[str] = []
+    for short_id in ordered_short_ids:
+        symbol = symbols[short_id]
+        attrs = symbol["attrs"]
+        body = symbol["body"]
+        glyph_symbols.append(f'<symbol id="{short_id}"{attrs}>{body}</symbol>')
+
+    return (
+        '<svg xmlns="http://www.w3.org/2000/svg" '
+        'xmlns:xlink="http://www.w3.org/1999/xlink">'
+        f"<defs>{''.join(glyph_symbols)}</defs>"
+        "</svg>"
+    )
+
+
+def _write_global_glyph_registry(map_path: str, registry: Dict[str, Any]) -> None:
+    payload: Dict[str, Any] = {
+        "version": _GLOBAL_GLYPH_MAP_VERSION,
+        "typst_version": registry["typst_version"],
+        "next_short_index": registry["next_short_index"],
+        "symbols": registry["symbols"],
+        "fingerprint_to_short": registry["fingerprint_to_short"],
+        "typst_id_to_short": registry["typst_id_to_short"],
+    }
+
+    with open(map_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        f.write("\n")
+
+
+def _extract_svg_symbols(
+    svg_data: str,
+) -> Optional[Tuple[str, List[Tuple[str, str, str]]]]:
+    defs_match = _SVG_DEFS_PATTERN.search(svg_data)
+    if not defs_match:
+        return None
+
+    defs_block = defs_match.group(0)
+    defs_inner = defs_match.group(1)
+    symbols: List[Tuple[str, str, str]] = []
+
+    for symbol_match in _SVG_SYMBOL_PATTERN.finditer(defs_inner):
+        attrs = symbol_match.group(1)
+        body = symbol_match.group(2)
+
+        id_match = _SVG_ID_ATTR_PATTERN.search(attrs)
+        if not id_match:
+            continue
+
+        local_id = id_match.group(1)
+        attrs_without_id = _SVG_ID_ATTR_PATTERN.sub("", attrs, count=1)
+        symbols.append((local_id, attrs_without_id, body))
+
+    return defs_block, symbols
+
+
+def _extract_wrapped_global_short_id(symbol_body: str) -> Optional[str]:
+    use_match = re.fullmatch(
+        r'\s*<use\b[^>]*(?:xlink:)?href="([^"]+)"[^>]*/?>\s*(?:</use>)?\s*',
+        symbol_body,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if not use_match:
+        return None
+
+    href_value = use_match.group(1)
+    if "#" not in href_value:
+        return None
+
+    href_path, short_id = href_value.rsplit("#", 1)
+    if not short_id:
+        return None
+
+    if not href_path:
+        return None
+
+    href_path_without_query = href_path.split("?", 1)[0]
+    href_basename = os.path.basename(href_path_without_query)
+    if href_basename != GLOBAL_GLYPH_ASSET_FILENAME and not re.fullmatch(
+        r"glyphs\.[0-9a-f]{6}\.svg",
+        href_basename,
+    ):
+        return None
+
+    return short_id
+
+
+def _extract_and_rewrite_shared_svg_glyphs(
+    svg_paths: List[str],
+    dest_dir: str,
+    glyph_scope_key: str,
+    global_glyph_asset_path: Optional[str] = None,
+    global_glyph_map_path: Optional[str] = None,
+) -> Optional[str]:
+    if not svg_paths:
+        return None
+
+    use_global_registry = bool(global_glyph_asset_path and global_glyph_map_path)
+    registry: Optional[Dict[str, Any]] = None
+    if use_global_registry:
+        if global_glyph_map_path is None:
+            raise RuntimeError("Global glyph map path is required.")
+        registry = _load_global_glyph_registry(global_glyph_map_path)
+
+    scope_component = _sanitize_asset_prefix_component(glyph_scope_key)
+    if not scope_component:
+        scope_component = "default"
+
+    long_id_to_symbol: Dict[str, Tuple[str, str]] = {}
+    page_symbol_maps: List[Tuple[str, str, str, List[Tuple[str, str, str]]]] = []
+
+    for svg_path in svg_paths:
+        with open(svg_path, "r", encoding="utf-8") as svg_file:
+            svg_data = svg_file.read()
+
+        extracted = _extract_svg_symbols(svg_data)
+        if not extracted:
+            continue
+
+        defs_block, symbols = extracted
+        if not symbols:
+            continue
+
+        local_symbol_map: List[Tuple[str, str, str]] = []
+        for local_id, attrs_without_id, body in symbols:
+            if use_global_registry and registry is not None:
+                wrapped_short_id = _extract_wrapped_global_short_id(body)
+                if wrapped_short_id:
+                    existing_symbols: Dict[str, Dict[str, str]] = registry["symbols"]
+                    if wrapped_short_id in existing_symbols:
+                        local_symbol_map.append(
+                            (local_id, attrs_without_id, wrapped_short_id)
+                        )
+                        continue
+
+            symbol_fingerprint = _canonical_symbol_fingerprint(attrs_without_id, body)
+            fingerprint_digest = hashlib.sha1(
+                symbol_fingerprint.encode("utf-8")
+            ).hexdigest()
+
+            if use_global_registry and registry is not None:
+                short_id = _resolve_global_short_id(
+                    registry,
+                    typst_id=local_id,
+                    fingerprint=fingerprint_digest,
+                    attrs_without_id=attrs_without_id,
+                    body=body,
+                )
+                local_symbol_map.append((local_id, attrs_without_id, short_id))
+                continue
+
+            long_id = f"glyph-{scope_component}-{fingerprint_digest}"
+            if long_id not in long_id_to_symbol:
+                long_id_to_symbol[long_id] = (attrs_without_id, body)
+            local_symbol_map.append((local_id, attrs_without_id, long_id))
+
+        page_symbol_maps.append((svg_path, svg_data, defs_block, local_symbol_map))
+
+    if not page_symbol_maps:
+        return None
+
+    short_id_map: Dict[str, str] = {}
+    if use_global_registry and registry is not None:
+        symbols = registry["symbols"]
+        if not symbols:
+            return None
+        glyph_svg = _render_glyph_svg(symbols)
+        if global_glyph_asset_path is None:
+            raise RuntimeError("Global glyph asset path is required.")
+        glyph_asset_seed_path = os.path.abspath(global_glyph_asset_path)
+        glyph_asset_dir = os.path.dirname(glyph_asset_seed_path)
+        glyph_asset_seed_name = os.path.basename(glyph_asset_seed_path)
+        glyph_asset_prefix, glyph_asset_suffix = os.path.splitext(glyph_asset_seed_name)
+        sanitized_prefix = _sanitize_asset_prefix_component(glyph_asset_prefix)
+        if not sanitized_prefix:
+            sanitized_prefix = "glyphs"
+        if not glyph_asset_suffix:
+            glyph_asset_suffix = ".svg"
+
+        glyph_asset_path = _write_hashed_asset(
+            asset_dir=glyph_asset_dir,
+            prefix=sanitized_prefix,
+            suffix=glyph_asset_suffix,
+            content=glyph_svg,
+            remove_stale=False,
+        )
+        if global_glyph_map_path is None:
+            raise RuntimeError("Global glyph map path is required.")
+        glyph_map_path = os.path.abspath(global_glyph_map_path)
+        os.makedirs(os.path.dirname(glyph_map_path), exist_ok=True)
+        _write_global_glyph_registry(glyph_map_path, registry)
+    else:
+        if not long_id_to_symbol:
+            return None
+        for index, long_id in enumerate(sorted(long_id_to_symbol.keys()), start=1):
+            short_id_map[long_id] = f"g{_to_base36(index)}"
+
+        glyph_symbols: List[str] = []
+        for long_id in sorted(long_id_to_symbol.keys()):
+            attrs_without_id, body = long_id_to_symbol[long_id]
+            short_id = short_id_map[long_id]
+            glyph_symbols.append(
+                f'<symbol id="{short_id}"{attrs_without_id}>{body}</symbol>'
+            )
+
+        glyph_svg = (
+            '<svg xmlns="http://www.w3.org/2000/svg" '
+            'xmlns:xlink="http://www.w3.org/1999/xlink">'
+            f"<defs>{''.join(glyph_symbols)}</defs>"
+            "</svg>"
+        )
+
+        assets_dir = safe_join_child(dest_dir, WEB_ASSETS_DIR_NAME)
+        os.makedirs(assets_dir, exist_ok=True)
+        glyph_prefix = f"glyphs-{scope_component}"
+        glyph_asset_path = _write_hashed_asset(
+            asset_dir=assets_dir,
+            prefix=glyph_prefix,
+            suffix=".svg",
+            content=glyph_svg,
+        )
+
+    for svg_path, svg_data, defs_block, local_symbol_map in page_symbol_maps:
+        glyph_href = build_relative_href(os.path.dirname(svg_path), glyph_asset_path)
+        wrapper_symbols: List[str] = []
+        seen_local_ids: Set[str] = set()
+
+        for local_id, attrs_without_id, long_id in local_symbol_map:
+            if local_id in seen_local_ids:
+                continue
+            seen_local_ids.add(local_id)
+
+            short_id = long_id if use_global_registry else short_id_map[long_id]
+            wrapper_symbols.append(
+                f'<symbol id="{local_id}"{attrs_without_id}'
+                f'><use href="{glyph_href}#{short_id}"/></symbol>'
+            )
+
+        rewritten_defs = f"<defs>{''.join(wrapper_symbols)}</defs>"
+        updated_svg_data = svg_data.replace(defs_block, rewritten_defs, 1)
+
+        with open(svg_path, "w", encoding="utf-8") as svg_file:
+            svg_file.write(updated_svg_data)
+
+    return glyph_asset_path
+
+
+def apply_global_glyph_mapping(root_dir: str, target_dirs: List[str]) -> Optional[str]:
+    assets_dir = safe_join_child(root_dir, WEB_ASSETS_DIR_NAME)
+    glyph_asset_path = os.path.join(assets_dir, GLOBAL_GLYPH_ASSET_FILENAME)
+    glyph_map_path = os.path.join(assets_dir, GLOBAL_GLYPH_MAP_FILENAME)
+
+    svg_paths: List[str] = []
+    for directory in target_dirs:
+        if not os.path.isdir(directory):
+            continue
+        for filename in sorted(os.listdir(directory)):
+            if _is_generated_svg(filename, "page") or _is_generated_svg(
+                filename, "meta-page"
+            ):
+                svg_paths.append(os.path.join(directory, filename))
+
+    if not svg_paths:
+        return None
+
+    glyph_result = _extract_and_rewrite_shared_svg_glyphs(
+        svg_paths,
+        dest_dir=root_dir,
+        glyph_scope_key="global",
+        global_glyph_asset_path=glyph_asset_path,
+        global_glyph_map_path=glyph_map_path,
+    )
+
+    for svg_path in svg_paths:
+        _optimize_svg_with_normalized_href(svg_path)
+    if glyph_result:
+        _optimize_svg_with_normalized_href(glyph_result, preserve_ids=True)
+
+    return glyph_result
+
+
+def _is_root_asset_referenced(root_dir: str, asset_filename: str) -> bool:
+    assets_dir = safe_join_child(root_dir, WEB_ASSETS_DIR_NAME)
+    assets_dir_abs = os.path.abspath(assets_dir)
+    needle = f"assets/{asset_filename}"
+
+    for current_dir, _, files in os.walk(root_dir):
+        for filename in files:
+            if not filename.endswith((".html", ".svg")):
+                continue
+
+            file_path = os.path.join(current_dir, filename)
+            file_abs = os.path.abspath(file_path)
+            if file_abs.startswith(assets_dir_abs + os.sep):
+                continue
+
+            with open(file_path, "r", encoding="utf-8") as f:
+                content = f.read()
+
+            if needle in content:
+                return True
+
+    return False
+
+
+def cleanup_legacy_glyph_assets(
+    root_dir: str,
+    target_dirs: List[str],
+    clean_global_store: bool = False,
+) -> int:
+    cleaned_count = 0
+
+    root_assets_dir = safe_join_child(root_dir, WEB_ASSETS_DIR_NAME)
+    candidate_asset_dirs: Set[str] = set()
+    candidate_asset_dirs.add(root_assets_dir)
+    for directory in target_dirs:
+        if not os.path.isdir(directory):
+            continue
+        candidate_asset_dirs.add(os.path.join(directory, WEB_ASSETS_DIR_NAME))
+
+    for asset_dir in sorted(candidate_asset_dirs):
+        if not os.path.isdir(asset_dir):
+            continue
+
+        normalized_asset_dir = os.path.abspath(asset_dir)
+        is_root_assets_dir = normalized_asset_dir == os.path.abspath(root_assets_dir)
+
+        for filename in os.listdir(asset_dir):
+            if filename == GLOBAL_GLYPH_ASSET_FILENAME:
+                if (
+                    clean_global_store
+                    and is_root_assets_dir
+                    and not _is_root_asset_referenced(root_dir, filename)
+                ):
+                    target_path = os.path.join(asset_dir, filename)
+                    if os.path.isfile(target_path):
+                        os.remove(target_path)
+                        cleaned_count += 1
+                continue
+
+            remove_legacy_post_glyph = filename.startswith(
+                "glyphs-"
+            ) and filename.endswith(".svg")
+            remove_legacy_global_glyph = (
+                clean_global_store
+                and is_root_assets_dir
+                and bool(re.fullmatch(r"glyphs\.[0-9a-f]{6}\.svg", filename))
+            )
+            if remove_legacy_global_glyph and _is_root_asset_referenced(
+                root_dir, filename
+            ):
+                remove_legacy_global_glyph = False
+
+            remove_legacy_global_map = (
+                clean_global_store
+                and is_root_assets_dir
+                and bool(re.fullmatch(r"glyph-map\.[0-9a-f]{6}\.json", filename))
+            )
+
+            if not (
+                remove_legacy_post_glyph
+                or remove_legacy_global_glyph
+                or remove_legacy_global_map
+            ):
+                continue
+
+            target_path = os.path.join(asset_dir, filename)
+            if not os.path.isfile(target_path):
+                continue
+
+            os.remove(target_path)
+            cleaned_count += 1
+
+        if normalized_asset_dir != os.path.abspath(root_assets_dir):
+            try:
+                if not os.listdir(asset_dir):
+                    os.rmdir(asset_dir)
+            except OSError:
+                pass
+
+    return cleaned_count
+
+
+def _normalize_svg_href_attributes(svg_content: str) -> str:
+    def _normalize_tag(match: re.Match) -> str:
+        tag = match.group(0)
+        has_xlink_href = bool(re.search(r"\bxlink:href\s*=", tag, flags=re.IGNORECASE))
+        if not has_xlink_href:
+            return tag
+
+        has_plain_href = bool(re.search(r"(?<!:)\bhref\s*=", tag, flags=re.IGNORECASE))
+        if has_plain_href:
+            tag = re.sub(
+                r"\s+xlink:href\s*=\s*(['\"])[^'\"]*\1",
+                "",
+                tag,
+                flags=re.IGNORECASE,
+            )
+
+        return re.sub(r"\bxlink:href\b", "href", tag, flags=re.IGNORECASE)
+
+    return re.sub(r"<[^>]+>", _normalize_tag, svg_content)
+
+
+def _strip_typst_classes(svg_content: str) -> str:
+    def _rewrite_class_attr(match: re.Match) -> str:
+        quote = match.group("quote")
+        class_value = match.group("value")
+        class_names = [
+            class_name
+            for class_name in class_value.split()
+            if class_name and not class_name.startswith("typst-")
+        ]
+        if not class_names:
+            return ""
+        return f" class={quote}{' '.join(class_names)}{quote}"
+
+    return re.sub(
+        r"\s+class\s*=\s*(?P<quote>['\"])(?P<value>[^'\"]*)(?P=quote)",
+        _rewrite_class_attr,
+        svg_content,
+    )
+
+
+def _prepare_anchor_hrefs_for_svgo(svg_content: str) -> str:
+    inserted_xlink_href = False
+
+    def _prepare_anchor_tag(match: re.Match) -> str:
+        nonlocal inserted_xlink_href
+        attrs = match.group(1)
+
+        if re.search(r"\bxlink:href\s*=", attrs, flags=re.IGNORECASE):
+            return match.group(0)
+
+        href_match = re.search(r"(?<!:)\bhref\s*=", attrs, flags=re.IGNORECASE)
+        if not href_match:
+            return match.group(0)
+
+        inserted_xlink_href = True
+        prepared_attrs = re.sub(
+            r"(?<!:)\bhref\s*=",
+            "xlink:href=",
+            attrs,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+        return f"<a{prepared_attrs}>"
+
+    prepared_svg = re.sub(r"<a([^>]*)>", _prepare_anchor_tag, svg_content)
+    if not inserted_xlink_href:
+        return prepared_svg
+
+    if re.search(r"<svg\b[^>]*\bxmlns:xlink\s*=", prepared_svg, flags=re.IGNORECASE):
+        return prepared_svg
+
+    return re.sub(
+        r"(<svg\b[^>]*)(>)",
+        r'\1 xmlns:xlink="http://www.w3.org/1999/xlink"\2',
+        prepared_svg,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+
+
+def _extract_anchor_href(attrs: str) -> Optional[str]:
+    href_match = re.search(
+        r"\s+(?:xlink:)?href\s*=\s*['\"](?P<href>[^'\"]+)['\"]",
+        attrs,
+        flags=re.IGNORECASE,
+    )
+    if href_match is None:
+        return None
+    href = href_match.group("href").strip()
+    return href if href else None
+
+
+def _parse_action_payload(action_payload: str) -> Tuple[str, Dict[str, str]]:
+    segments = [segment.strip() for segment in action_payload.split("|")]
+    segments = [segment for segment in segments if segment]
+    if not segments:
+        return "", {}
+
+    action_token = segments[0]
+    metadata: Dict[str, str] = {}
+    for segment in segments[1:]:
+        separator_index = segment.find(":")
+        if separator_index <= 0:
+            continue
+        key = segment[:separator_index].strip().lower()
+        value = segment[separator_index + 1 :].strip()
+        if not key or not value:
+            continue
+        metadata[key] = value
+    return action_token, metadata
+
+
+def _parse_svg_action_href(href: Optional[str]) -> Tuple[Optional[str], Dict[str, str]]:
+    if href is None:
+        return None, {}
+
+    stripped_href = href.strip()
+    if not stripped_href.startswith("#action="):
+        return None, {}
+
+    action_payload = stripped_href[len("#action=") :]
+    try:
+        action_payload = unquote(action_payload)
+    except Exception:
+        pass
+    return _parse_action_payload(action_payload)
+
+
+def _infer_svg_anchor_role(href: Optional[str]) -> Optional[str]:
+    action_token, metadata = _parse_svg_action_href(href)
+    if action_token is None:
+        return None
+
+    explicit_role = metadata.get("role")
+    if explicit_role:
+        return explicit_role
+
+    if action_token == "theme" or action_token.startswith("copy:"):
+        return "button"
+    return None
+
+
+_INDEX_HTML_SEGMENT_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_DATE_PATH_SEGMENT_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_INDEX_LABEL_LOWERCASE_WORDS = {
+    "a",
+    "an",
+    "and",
+    "as",
+    "at",
+    "by",
+    "for",
+    "in",
+    "of",
+    "on",
+    "or",
+    "the",
+    "to",
+    "with",
+}
+
+
+def _humanize_index_target_segment(segment: str) -> Optional[str]:
+    normalized = segment.strip()
+    if not normalized or normalized in {".", ".."}:
+        return None
+    if _DATE_PATH_SEGMENT_PATTERN.fullmatch(normalized):
+        return None
+    if not _INDEX_HTML_SEGMENT_PATTERN.fullmatch(normalized):
+        return None
+
+    words = [part for part in re.split(r"[._-]+", normalized) if part]
+    if not words:
+        return None
+
+    label_parts: List[str] = []
+    for index, word in enumerate(words):
+        if word.isupper() or word.isdigit():
+            label_parts.append(word)
+            continue
+        if any(char.isdigit() for char in word):
+            if word[0].isalpha():
+                label_parts.append(word[0].upper() + word[1:])
+            else:
+                label_parts.append(word)
+            continue
+
+        lower_word = word.lower()
+        if index > 0 and lower_word in _INDEX_LABEL_LOWERCASE_WORDS:
+            label_parts.append(lower_word)
+            continue
+
+        label_parts.append(lower_word.capitalize())
+
+    label = " ".join(label_parts).strip()
+    return label if label else None
+
+
+def _infer_index_href_label(href: str) -> Optional[str]:
+    parsed_href = urlparse(href)
+    path = parsed_href.path or href
+    try:
+        path = unquote(path)
+    except Exception:
+        pass
+
+    normalized_path = path.replace("\\", "/").strip()
+    if not normalized_path:
+        return None
+
+    segments = [
+        segment for segment in normalized_path.split("/") if segment and segment != "."
+    ]
+    if not segments or segments[-1].lower() != "index.html":
+        return None
+
+    if len(segments) >= 2:
+        target_label = _humanize_index_target_segment(segments[-2])
+        if target_label is not None:
+            return target_label
+    return "Contents"
+
+
+def _infer_svg_anchor_label(href: Optional[str]) -> Optional[str]:
+    if href is None:
+        return None
+
+    stripped_href = href.strip()
+    if not stripped_href:
+        return None
+
+    action_token, metadata = _parse_svg_action_href(href)
+    if action_token is not None:
+        explicit_label = metadata.get("label")
+        if explicit_label:
+            return explicit_label
+        if action_token == "theme":
+            return "Theme"
+        if action_token.startswith("copy:"):
+            return "Copy"
+        return "Action"
+
+    if stripped_href.startswith(("http://", "https://")):
+        parsed = urlparse(stripped_href)
+        if parsed.netloc:
+            return f"External: {parsed.netloc}"
+        return "External"
+
+    index_label = _infer_index_href_label(stripped_href)
+    if index_label is not None:
+        return index_label
+
+    href_lower = stripped_href.lower()
+    if href_lower.endswith("meta.html"):
+        return "Meta"
+    if href_lower.endswith(".pdf"):
+        return "PDF"
+    if href_lower.endswith(".typ"):
+        return "Source"
+
+    return "Link"
+
+
+def _inject_svg_anchor_accessibility(svg_data: str) -> str:
+    def _rewrite_anchor(match: re.Match) -> str:
+        attrs = match.group("attrs")
+        body = match.group("body")
+        href = _extract_anchor_href(attrs)
+        label = _infer_svg_anchor_label(href)
+        if label is None:
+            return match.group(0)
+
+        rewritten_attrs = attrs
+        role = _infer_svg_anchor_role(href)
+        has_role = (
+            re.search(r"\s+role\s*=\s*['\"][^'\"]+['\"]", attrs, flags=re.IGNORECASE)
+            is not None
+        )
+        if role is not None and not has_role:
+            rewritten_attrs += f' role="{html.escape(role, quote=True)}"'
+
+        has_explicit_name = (
+            re.search(r"\s+aria-label\s*=\s*['\"][^'\"]+['\"]", attrs, flags=re.IGNORECASE)
+            is not None
+            or re.search(
+                r"\s+aria-labelledby\s*=\s*['\"][^'\"]+['\"]",
+                attrs,
+                flags=re.IGNORECASE,
+            )
+            is not None
+        )
+        if not has_explicit_name:
+            rewritten_attrs += f' aria-label="{html.escape(label, quote=True)}"'
+
+        rewritten_body = body
+        has_title_node = re.search(r"<title\b[^>]*>", body, flags=re.IGNORECASE) is not None
+        if not has_title_node:
+            rewritten_body = f"<title>{html.escape(label)}</title>{body}"
+
+        return f"<a{rewritten_attrs}>{rewritten_body}</a>"
+
+    return re.sub(
+        r"<a(?P<attrs>[^>]*)>(?P<body>.*?)</a>",
+        _rewrite_anchor,
+        svg_data,
+        flags=re.DOTALL,
+    )
+
+
+def _normalize_svg_href_file(svg_path: str) -> None:
+    if not os.path.isfile(svg_path):
+        return
+
+    with open(svg_path, "r", encoding="utf-8") as svg_file:
+        svg_data = svg_file.read()
+
+    normalized_svg_data = _normalize_svg_href_attributes(svg_data)
+    normalized_svg_data = _strip_typst_classes(normalized_svg_data)
+    normalized_svg_data = _inject_svg_anchor_accessibility(normalized_svg_data)
+    if normalized_svg_data == svg_data:
+        return
+
+    with open(svg_path, "w", encoding="utf-8") as svg_file:
+        svg_file.write(normalized_svg_data)
+
+
+def _prepare_anchor_hrefs_for_svgo_file(svg_path: str) -> None:
+    if not os.path.isfile(svg_path):
+        return
+
+    with open(svg_path, "r", encoding="utf-8") as svg_file:
+        svg_data = svg_file.read()
+
+    prepared_svg_data = _prepare_anchor_hrefs_for_svgo(svg_data)
+    if prepared_svg_data == svg_data:
+        return
+
+    with open(svg_path, "w", encoding="utf-8") as svg_file:
+        svg_file.write(prepared_svg_data)
+
+
+def _optimize_svg_with_normalized_href(
+    svg_path: str,
+    preserve_ids: bool = False,
+) -> None:
+    if not os.path.isfile(svg_path):
+        return
+
+    _prepare_anchor_hrefs_for_svgo_file(svg_path)
+    _run_svgo(svg_path, preserve_ids=preserve_ids)
+    _normalize_svg_href_file(svg_path)
+
+
 def patch_svg_file(
     src_path: str,
     dst_path: str,
     svg_href_rewrites: Optional[Dict[str, str]],
-) -> Tuple[str, str]:
+) -> None:
     with open(src_path, "r", encoding="utf-8") as svg_file:
         svg_data = svg_file.read()
-
-    aspect_ratio = "auto"
-    max_width_style = ""
-    match_w = re.search(r'<svg[^>]*?\swidth="([^"]+)"', svg_data)
-    match_vb = re.search(
-        r'<svg[^>]*?\sviewBox="[^"]+\s+[^"]+\s+([\d\.]+)\s+([\d\.]+)"', svg_data
-    )
 
     svg_data = re.sub(
         r'(<svg[^>]*?)\swidth="[^"]+"', r'\1 width="100%"', svg_data, count=1
@@ -474,74 +2156,50 @@ def patch_svg_file(
         r'(<svg[^>]*?)\sheight="[^"]+"', r'\1 height="100%"', svg_data, count=1
     )
 
-    if svg_href_rewrites:
-        def _rewrite_href(match: re.Match) -> str:
-            attr = match.group(1)
-            value = match.group(2)
-            safe_rewrites: Dict[str, str] = svg_href_rewrites or {}
-            return f'{attr}="{safe_rewrites.get(value, value)}"'
+    def _rewrite_href(match: re.Match) -> str:
+        attr = match.group("attr")
+        quote = match.group("quote")
+        value = match.group("value")
+        safe_rewrites = svg_href_rewrites or {}
+        rewritten = safe_rewrites.get(value, value)
+        return f"{attr}={quote}{rewritten}{quote}"
 
-        svg_data = re.sub(
-            r'(xlink:href|href)="([^"]+)"',
-            _rewrite_href,
-            svg_data,
-        )
+    svg_data = re.sub(
+        r"(?P<attr>(?:xlink:)?href)\s*=\s*(?P<quote>['\"])(?P<value>[^'\"]+)(?P=quote)",
+        _rewrite_href,
+        svg_data,
+    )
+    svg_data = _prepare_anchor_hrefs_for_svgo(svg_data)
 
     def _rewrite_anchor_tag(match: re.Match) -> str:
         attrs = match.group(1)
-        raw_copy_match = re.search(
-            r'\s+(?:xlink:href|href)="javascript:parent.copyCode\(\"raw-copy-[0-9a-f]{10}\"\)"',
+        javascript_parent_match = re.search(
+            r"\s+(?:xlink:)?href\s*=\s*['\"]javascript:parent\.(?:copyCode|toggleColorTheme)\(",
             attrs,
         )
-        if raw_copy_match:
-            return f"<a{attrs}>"
+        action_hash_match = re.search(
+            r"\s+(?:xlink:)?href\s*=\s*['\"]#action=[^'\"]*['\"]",
+            attrs,
+        )
+        if javascript_parent_match or action_hash_match:
+            attrs_without_target = re.sub(
+                r"\s+target\s*=\s*['\"][^'\"]*['\"]",
+                "",
+                attrs,
+            )
+            return f"<a{attrs_without_target}>"
 
-        if re.search(r'\s+target="[^"]*"', attrs):
+        if re.search(r"\s+target\s*=\s*['\"][^'\"]*['\"]", attrs):
             return f"<a{attrs}>"
         return f'<a target="_top"{attrs}>'
 
     svg_data = re.sub(r"<a([^>]*)>", _rewrite_anchor_tag, svg_data)
-    svg_data = re.sub(r'\sclass="[^"]+"', "", svg_data)
+    svg_data = _inject_svg_anchor_accessibility(svg_data)
+    svg_data = _inject_svg_theme_classes(svg_data)
+    svg_data = _inject_svg_theme_style(svg_data)
 
     with open(dst_path, "w", encoding="utf-8") as svg_file:
         svg_file.write(svg_data)
-
-    svgo_path = shutil.which("svgo") or shutil.which("svgo.cmd")
-    if svgo_path:
-        command = [
-            svgo_path,
-            dst_path,
-            "-o",
-            dst_path,
-            "--multipass",
-            "--precision",
-            "2",
-        ]
-        if os.path.isfile(_SVGO_CONFIG_PATH):
-            command.extend(["--config", _SVGO_CONFIG_PATH])
-
-        try:
-            subprocess.run(command, check=True, capture_output=True)
-        except subprocess.CalledProcessError as e:
-            print(f"Aggressive SVGO failed for {dst_path}; retrying with defaults.", file=sys.stderr)
-            if e.stderr:
-                print(e.stderr.decode("utf-8"), file=sys.stderr)
-            try:
-                subprocess.run([svgo_path, dst_path, "-o", dst_path], check=True, capture_output=True)
-            except subprocess.CalledProcessError as fallback_error:
-                print(f"SVGO failed for {dst_path}", file=sys.stderr)
-                if fallback_error.stderr:
-                    print(fallback_error.stderr.decode("utf-8"), file=sys.stderr)
-    else:
-        print("SVGO not found, skipping SVG optimization.", file=sys.stderr)
-
-    if match_vb:
-        w, h = float(match_vb.group(1)), float(match_vb.group(2))
-        aspect_ratio = f"{w} / {h}"
-    if match_w:
-        max_width_style = f"max-width: {match_w.group(1)}; width: 100%;"
-
-    return aspect_ratio, max_width_style
 
 
 def build_html_from_svgs(
@@ -561,12 +2219,20 @@ def build_html_from_svgs(
     revision_html: str = "",
     svg_name_prefix: str = "page",
     html_filename: str = "index.html",
+    stylesheet_asset_path: Optional[str] = None,
     clipboard_asset_path: Optional[str] = None,
+    theme_asset_path: Optional[str] = None,
+    glyph_scope_key: Optional[str] = None,
+    enable_shared_glyph_extraction: bool = True,
+    global_glyph_asset_path: Optional[str] = None,
+    global_glyph_map_path: Optional[str] = None,
 ) -> str:
     with open(template_path, "r", encoding="utf-8") as f:
         template = f.read()
 
     page_links_list: List[str] = []
+    page_render_items: List[Tuple[str, str]] = []
+    patched_svg_paths: List[str] = []
     os.makedirs(dest_dir, exist_ok=True)
 
     svg_files = sorted(
@@ -577,23 +2243,49 @@ def build_html_from_svgs(
 
     current_svg_set = set(svg_files)
     for filename in os.listdir(dest_dir):
-        if _is_generated_svg(filename, svg_name_prefix) and filename not in current_svg_set:
+        if (
+            _is_generated_svg(filename, svg_name_prefix)
+            and filename not in current_svg_set
+        ):
             os.remove(os.path.join(dest_dir, filename))
 
     for i, filename in enumerate(svg_files, start=1):
         src_path = os.path.join(output_dir, filename)
         dst_path = os.path.join(dest_dir, filename)
 
-        aspect_ratio, max_width_style = patch_svg_file(
+        patch_svg_file(
             src_path,
             dst_path,
             svg_href_rewrites,
         )
+        patched_svg_paths.append(dst_path)
 
         page_title = title_format.replace("{i}", str(i))
+        page_render_items.append((filename, page_title))
+
+    glyph_asset_path: Optional[str] = None
+    if enable_shared_glyph_extraction:
+        if glyph_scope_key is None:
+            glyph_scope = svg_name_prefix
+        else:
+            glyph_scope = glyph_scope_key
+        glyph_asset_path = _extract_and_rewrite_shared_svg_glyphs(
+            patched_svg_paths,
+            dest_dir=dest_dir,
+            glyph_scope_key=glyph_scope,
+            global_glyph_asset_path=global_glyph_asset_path,
+            global_glyph_map_path=global_glyph_map_path,
+        )
+
+    for svg_path in patched_svg_paths:
+        _optimize_svg_with_normalized_href(svg_path)
+    if enable_shared_glyph_extraction and glyph_asset_path:
+        _optimize_svg_with_normalized_href(glyph_asset_path, preserve_ids=True)
+
+    for filename, page_title in page_render_items:
         page_links_list.append(
             f'<object class="page" type="image/svg+xml" data="./{filename}" '
-            f'title="{page_title}" style="aspect-ratio: {aspect_ratio}; {max_width_style}"></object>'
+            f'title="{page_title}"></object>'
         )
 
     page_links = "\n".join(page_links_list)
@@ -613,7 +2305,9 @@ def build_html_from_svgs(
         hidden_text = f'<div class="sr-only">\n{hidden_text_override}\n</div>'
 
     meta_description = description if description else title
-    index_content = index_content.replace("{{DESCRIPTION}}", html.escape(meta_description))
+    index_content = index_content.replace(
+        "{{DESCRIPTION}}", html.escape(meta_description)
+    )
     index_content = index_content.replace("{{TITLE}}", html.escape(title))
     index_content = index_content.replace("{{TEXT}}", hidden_text)
     index_content = index_content.replace("{{RAW_COPY}}", raw_copy_html)
@@ -621,13 +2315,46 @@ def build_html_from_svgs(
     index_content = index_content.replace("{{REVISION}}", revision_html)
 
     index_path = os.path.join(dest_dir, html_filename)
+    stylesheet_src = ""
+    if stylesheet_asset_path:
+        stylesheet_src = build_relative_href(
+            os.path.dirname(index_path),
+            stylesheet_asset_path,
+        )
     clipboard_src = ""
     if clipboard_asset_path:
         clipboard_src = build_relative_href(
             os.path.dirname(index_path),
             clipboard_asset_path,
         )
-    index_content = index_content.replace("{{CLIPBOARD_SRC}}", html.escape(clipboard_src))
+    theme_src = ""
+    if theme_asset_path:
+        theme_src = build_relative_href(
+            os.path.dirname(index_path),
+            theme_asset_path,
+        )
+    index_content = index_content.replace(
+        "{{STYLESHEET_SRC}}", html.escape(stylesheet_src)
+    )
+    index_content = index_content.replace(
+        "{{CLIPBOARD_SRC}}", html.escape(clipboard_src)
+    )
+    index_content = index_content.replace("{{THEME_SRC}}", html.escape(theme_src))
+
+    glyph_preload_html = ""
+    if glyph_asset_path is not None:
+        warmup_glyph_asset_path = glyph_asset_path
+    else:
+        warmup_glyph_asset_path = global_glyph_asset_path
+    if warmup_glyph_asset_path:
+        glyph_src = build_relative_href(
+            os.path.dirname(index_path),
+            warmup_glyph_asset_path,
+        )
+        glyph_symbol_id = _extract_first_glyph_symbol_id(warmup_glyph_asset_path)
+        if glyph_symbol_id is not None:
+            glyph_preload_html = _build_glyph_preload_svg(glyph_src, glyph_symbol_id)
+    index_content = index_content.replace("{{GLYPH_PRELOAD}}", glyph_preload_html)
 
     with open(index_path, "w", encoding="utf-8") as f:
         f.write(index_content)
@@ -635,38 +2362,19 @@ def build_html_from_svgs(
     return index_path
 
 
-def find_latest_revision(posts_dir: str, workspace_name: str, skip_latest: bool = False) -> Tuple[Optional[str], Optional[str]]:
-    if not os.path.exists(posts_dir):
+def find_latest_revision(
+    posts_dir: str, workspace_name: str, skip_latest: bool = False
+) -> Tuple[Optional[str], Optional[str]]:
+    revisions = list_workspace_revisions(posts_dir, workspace_name)
+    if not revisions:
         return None, None
 
-    date_dirs = sorted(os.listdir(posts_dir), reverse=True)
-    for date_str in date_dirs:
-        date_dir = os.path.join(posts_dir, date_str)
-        if not os.path.isdir(date_dir):
-            continue
+    revision_index = 1 if skip_latest else 0
+    if revision_index >= len(revisions):
+        return None, None
 
-        revs: List[Tuple[int, str]] = []
-        for d in os.listdir(date_dir):
-            if d == workspace_name:
-                revs.append((0, d))
-            elif d.startswith(workspace_name + "-"):
-                try:
-                    revs.append((int(d[len(workspace_name) + 1 :]), d))
-                except ValueError:
-                    pass
-
-        if revs:
-            revs.sort(key=lambda x: x[0], reverse=True)
-            if skip_latest and len(revs) > 1:
-                last_dir_name = revs[1][1]
-                return date_str, f"../../{date_str}/{last_dir_name}/index.html"
-            elif skip_latest and len(revs) <= 1:
-                continue
-            else:
-                last_dir_name = revs[0][1]
-                return date_str, f"../../{date_str}/{last_dir_name}/index.html"
-
-    return None, None
+    selected = revisions[revision_index]
+    return selected.date, f"../../{selected.date}/{selected.entry_name}/index.html"
 
 
 def compile_and_build_html(
@@ -687,30 +2395,38 @@ def compile_and_build_html(
     svg_href_rewrites: Optional[Dict[str, str]] = None,
     svg_name_prefix: str = "page",
     html_filename: str = "index.html",
+    stylesheet_asset_path: Optional[str] = None,
     clipboard_asset_path: Optional[str] = None,
+    theme_asset_path: Optional[str] = None,
+    glyph_scope_key: Optional[str] = None,
+    enable_shared_glyph_extraction: bool = True,
+    global_glyph_asset_path: Optional[str] = None,
+    global_glyph_map_path: Optional[str] = None,
 ) -> str:
     svg_prefix = f"{svg_name_prefix}{{0p}}.{asset_hash}.svg"
     pdf_name = f"{file_prefix}.{asset_hash}.pdf"
-    
+    pdf_creation_timestamp = _resolve_creation_timestamp(inputs_pdf)
+
     run_typst_compile(
         source_bytes,
         os.path.join(output_dir, svg_prefix),
         export_format="svg",
         inputs=inputs_svg,
     )
-    
+
     pdf_path = os.path.join(output_dir, pdf_name)
     run_typst_compile(
         source_bytes,
         pdf_path,
         export_format="pdf",
         inputs=inputs_pdf,
+        creation_timestamp=pdf_creation_timestamp,
     )
-    
+
     page_count = len(
         [f for f in os.listdir(output_dir) if _is_generated_svg(f, svg_name_prefix)]
     )
-    
+
     return build_html_from_svgs(
         template_path=template_path,
         output_dir=output_dir,
@@ -726,5 +2442,11 @@ def compile_and_build_html(
         raw_copy_html=raw_copy_html,
         svg_name_prefix=svg_name_prefix,
         html_filename=html_filename,
+        stylesheet_asset_path=stylesheet_asset_path,
         clipboard_asset_path=clipboard_asset_path,
+        theme_asset_path=theme_asset_path,
+        glyph_scope_key=glyph_scope_key or svg_name_prefix,
+        enable_shared_glyph_extraction=enable_shared_glyph_extraction,
+        global_glyph_asset_path=global_glyph_asset_path,
+        global_glyph_map_path=global_glyph_map_path,
     )

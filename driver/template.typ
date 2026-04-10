@@ -49,17 +49,35 @@
   body
 }
 
+#let nav_link(href, body) = link(href)[#body]
+
+#let a11y_action(action, body, label: none, role: "button") = {
+  let label_metadata = if label == none {
+    ""
+  } else {
+    "|label:" + label
+  }
+  let role_metadata = if role == none {
+    ""
+  } else {
+    "|role:" + role
+  }
+  link("#action=" + action + label_metadata + role_metadata)[#body]
+}
+
+#let a11y_copy_action(body, text) = {
+  show underline: it => it.body
+  a11y_action(
+    "copy:" + bytes-to-hex(sha1(bytes(text))).slice(0, 10),
+    body,
+    label: "Copy",
+  )
+}
+
 #let with_raw_copy(body) = {
   let raw_copy_enabled = (
     sys.inputs.at("with_driver", default: "false") == "true" and sys.inputs.at("export_format", default: "svg") == "svg"
   )
-
-  let raw_copy_id(text) = "raw-copy-" + bytes-to-hex(sha1(bytes(text))).slice(0, 10)
-
-  let raw_copy_link(content, text) = [
-    #show underline: it => it.body
-    #link("javascript:parent.copyCode(\"" + raw_copy_id(text) + "\")")[#content]
-  ]
 
   show raw: it => {
     if it.block {
@@ -75,7 +93,7 @@
         ],
       )
       if raw_copy_enabled {
-        raw_copy_link(content, it.text)
+        a11y_copy_action(content, it.text)
       } else {
         content
       }
@@ -84,11 +102,7 @@
         #set text(fill: luma(20))
         #it
       ]
-      if raw_copy_enabled {
-        raw_copy_link(content, it.text)
-      } else {
-        content
-      }
+      content
     }
   }
 
@@ -118,13 +132,35 @@
 ) = {
   show: base_layout.with(title: title, page_margin: page_margin)
 
+  let back_href = sys.inputs.at("back_href", default: "./index.html")
+
+  let default_top_bar = if sys.inputs.at("export_format", default: "svg") == "svg" {
+    block(
+      width: 100%,
+      [
+        #set text(size: 10pt, fill: luma(100))
+        #align(right)[
+          #nav_link(back_href, [Back]) | #a11y_action("theme", [Theme], label: "Theme")
+        ]
+      ],
+    )
+  } else {
+    none
+  }
+
+  let resolved_top_bar = if top_bar != none {
+    top_bar
+  } else {
+    default_top_bar
+  }
+
   if justify {
     set par(justify: true, first-line-indent: 0pt, leading: 0.75em)
     set block(spacing: 1.5em)
   }
 
-  if top_bar != none {
-    block(width: 100%)[#top_bar]
+  if resolved_top_bar != none {
+    block(width: 100%)[#resolved_top_bar]
   }
 
   with_raw_copy[
