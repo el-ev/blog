@@ -1,5 +1,6 @@
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 import os
+import shutil
 import sys
 from argparse import Namespace
 from datetime import datetime
@@ -7,7 +8,12 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .compile import run_compile
 from .content import update_content
-from .shared import build_driver_asset_context, refresh_glyph_assets
+from .shared import (
+    build_driver_asset_context,
+    build_public_page_url,
+    refresh_glyph_assets,
+    resolve_base_url,
+)
 from .submission_flow import (
     collect_published_workspaces,
     find_latest_revision_entry,
@@ -98,6 +104,13 @@ def _submit_to_destination(
             workspace_files=workspace_files,
             generated_at=meta_generated_at,
         )
+        base_url = resolve_base_url(args)
+        meta_og_url = build_public_page_url(
+            base_url=base_url,
+            root_dir=args.root_dir,
+            dest_dir=dest_dir,
+            html_filename="meta.html",
+        )
         compile_meta_page(
             build_base=args.build_base,
             base_dir=base_dir,
@@ -111,6 +124,7 @@ def _submit_to_destination(
             global_glyph_asset_path=asset_context.global_glyph_asset_path,
             global_glyph_map_path=asset_context.global_glyph_map_path,
             rss_feed_path=os.path.join(args.root_dir, "rss.xml"),
+            og_url=meta_og_url,
         )
 
         rewrite_stylesheet_href(

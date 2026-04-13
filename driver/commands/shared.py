@@ -1,7 +1,7 @@
 import json
 import os
 from dataclasses import dataclass
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from .utils import (
     DriverWebAssets,
@@ -77,3 +77,41 @@ def load_config_data(config_path: str, warn_to_stderr: bool = False) -> Dict[str
             f"Invalid config file '{config_path}': expected JSON object."
         )
     return loaded
+
+
+def resolve_base_url(args: Any, default: str = "https://owo.li/blog/") -> str:
+    config_path = getattr(args, "config", "")
+    config_data = load_config_data(config_path)
+    base_url_arg = getattr(args, "base_url", None)
+    if base_url_arg:
+        base_url_raw = base_url_arg
+    elif "base_url" in config_data:
+        base_url_raw = config_data["base_url"]
+    else:
+        base_url_raw = default
+    return str(base_url_raw).rstrip("/")
+
+
+def build_public_page_url(
+    base_url: str,
+    root_dir: str,
+    dest_dir: str,
+    html_filename: str = "index.html",
+) -> Optional[str]:
+    root_abs = os.path.abspath(root_dir)
+    dest_abs = os.path.abspath(dest_dir)
+    try:
+        if os.path.commonpath([root_abs, dest_abs]) != root_abs:
+            return None
+    except ValueError:
+        return None
+
+    rel_dir = os.path.relpath(dest_abs, start=root_abs).replace("\\", "/")
+    if html_filename == "index.html":
+        if rel_dir == ".":
+            return f"{base_url}/"
+        return f"{base_url}/{rel_dir}/"
+
+    if rel_dir == ".":
+        return f"{base_url}/{html_filename}"
+    return f"{base_url}/{rel_dir}/{html_filename}"

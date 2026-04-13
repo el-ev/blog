@@ -2249,6 +2249,30 @@ def patch_svg_file(
         svg_file.write(svg_data)
 
 
+def _build_open_graph_metadata(
+    title: str,
+    description: str,
+    og_type: str,
+    og_url: Optional[str],
+) -> str:
+    if not og_type:
+        raise RuntimeError("Open Graph type must not be empty.")
+
+    metadata_lines = [
+        f'<meta property="og:title" content="{html.escape(title, quote=True)}">',
+        (
+            '<meta property="og:description" content="'
+            f'{html.escape(description, quote=True)}">'
+        ),
+        f'<meta property="og:type" content="{html.escape(og_type, quote=True)}">',
+    ]
+    if og_url:
+        metadata_lines.append(
+            f'<meta property="og:url" content="{html.escape(og_url, quote=True)}">'
+        )
+    return "\n    ".join(metadata_lines)
+
+
 def build_html_from_svgs(
     template_path: str,
     output_dir: str,
@@ -2270,6 +2294,8 @@ def build_html_from_svgs(
     clipboard_asset_path: Optional[str] = None,
     theme_asset_path: Optional[str] = None,
     rss_feed_path: Optional[str] = None,
+    og_type: str = "website",
+    og_url: Optional[str] = None,
     glyph_scope_key: Optional[str] = None,
     enable_shared_glyph_extraction: bool = True,
     global_glyph_asset_path: Optional[str] = None,
@@ -2355,6 +2381,15 @@ def build_html_from_svgs(
     meta_description = description if description else title
     index_content = index_content.replace(
         "{{DESCRIPTION}}", html.escape(meta_description)
+    )
+    index_content = index_content.replace(
+        "{{OGP_METADATA}}",
+        _build_open_graph_metadata(
+            title=title,
+            description=meta_description,
+            og_type=og_type,
+            og_url=og_url,
+        ),
     )
     index_content = index_content.replace("{{TITLE}}", html.escape(title))
     index_content = index_content.replace("{{TEXT}}", hidden_text)
@@ -2458,6 +2493,8 @@ def compile_and_build_html(
     clipboard_asset_path: Optional[str] = None,
     theme_asset_path: Optional[str] = None,
     rss_feed_path: Optional[str] = None,
+    og_type: str = "website",
+    og_url: Optional[str] = None,
     glyph_scope_key: Optional[str] = None,
     enable_shared_glyph_extraction: bool = True,
     global_glyph_asset_path: Optional[str] = None,
@@ -2506,6 +2543,8 @@ def compile_and_build_html(
         clipboard_asset_path=clipboard_asset_path,
         theme_asset_path=theme_asset_path,
         rss_feed_path=rss_feed_path,
+        og_type=og_type,
+        og_url=og_url,
         glyph_scope_key=glyph_scope_key or svg_name_prefix,
         enable_shared_glyph_extraction=enable_shared_glyph_extraction,
         global_glyph_asset_path=global_glyph_asset_path,

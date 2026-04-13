@@ -11,7 +11,11 @@ from .compile_hidden_text import (
     build_hidden_text,
     replace_hidden_block,
 )
-from .shared import build_driver_asset_context
+from .shared import (
+    build_driver_asset_context,
+    build_public_page_url,
+    resolve_base_url,
+)
 from .utils import (
     WORKSPACE_PUBLIC_DIR_NAME,
     build_raw_copy_assets,
@@ -149,6 +153,7 @@ def _compile_initial_post_html(
     clipboard_asset_path: str,
     theme_asset_path: str,
     rss_feed_path: Optional[str],
+    og_url: Optional[str],
     enable_shared_glyph_extraction: bool,
     global_glyph_asset_path: Optional[str] = None,
     global_glyph_map_path: Optional[str] = None,
@@ -182,6 +187,8 @@ def _compile_initial_post_html(
         clipboard_asset_path=clipboard_asset_path,
         theme_asset_path=theme_asset_path,
         rss_feed_path=rss_feed_path,
+        og_type="article",
+        og_url=og_url,
         enable_shared_glyph_extraction=enable_shared_glyph_extraction,
         global_glyph_asset_path=global_glyph_asset_path,
         global_glyph_map_path=global_glyph_map_path,
@@ -276,6 +283,13 @@ def run_compile(args: Namespace) -> None:
         rss_feed_path: Optional[str] = None
         if output_dir_override is not None:
             rss_feed_path = os.path.join(args.root_dir, "rss.xml")
+        base_url = resolve_base_url(args)
+        og_url = build_public_page_url(
+            base_url=base_url,
+            root_dir=args.root_dir,
+            dest_dir=output_dir,
+            html_filename="index.html",
+        )
         initial_hidden_text = _compile_initial_post_html(
             output_dir=output_dir,
             base_dir=base_dir,
@@ -293,6 +307,7 @@ def run_compile(args: Namespace) -> None:
             clipboard_asset_path=asset_context.web_assets.clipboard_script_path,
             theme_asset_path=asset_context.web_assets.theme_script_path,
             rss_feed_path=rss_feed_path,
+            og_url=og_url,
             enable_shared_glyph_extraction=enable_shared_glyph_extraction,
             global_glyph_asset_path=asset_context.global_glyph_asset_path,
             global_glyph_map_path=asset_context.global_glyph_map_path,

@@ -6,9 +6,10 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from .shared import (
+    build_public_page_url,
     build_driver_asset_context,
-    load_config_data,
     refresh_glyph_assets,
+    resolve_base_url,
 )
 from .utils import (
     reset_directory,
@@ -250,6 +251,13 @@ def update_content(args: Namespace) -> None:
     root_dir: str = args.root_dir
     os.makedirs(root_dir, exist_ok=True)
     asset_context = build_driver_asset_context(base_dir, root_dir)
+    base_url = resolve_base_url(args)
+    og_url = build_public_page_url(
+        base_url=base_url,
+        root_dir=root_dir,
+        dest_dir=root_dir,
+        html_filename="index.html",
+    )
 
     compile_and_build_html(
         source_bytes=content_source_bytes,
@@ -269,6 +277,8 @@ def update_content(args: Namespace) -> None:
         clipboard_asset_path=asset_context.web_assets.clipboard_script_path,
         theme_asset_path=asset_context.web_assets.theme_script_path,
         rss_feed_path=os.path.join(root_dir, "rss.xml"),
+        og_type="website",
+        og_url=og_url,
         global_glyph_asset_path=asset_context.global_glyph_asset_path,
         global_glyph_map_path=asset_context.global_glyph_map_path,
     )
@@ -293,16 +303,6 @@ def update_content(args: Namespace) -> None:
         clean_global_store=True,
     )
 
-    config_path: str = getattr(args, "config", "")
-    config_data = load_config_data(config_path)
-    base_url_arg = getattr(args, "base_url", None)
-    if base_url_arg:
-        base_url_raw = base_url_arg
-    elif "base_url" in config_data:
-        base_url_raw = config_data["base_url"]
-    else:
-        base_url_raw = "https://owo.li/blog/"
-    base_url = str(base_url_raw).rstrip("/")
     sitemap_lines = _build_sitemap_lines(base_url, posts_by_date)
     rss_lines = _build_rss_lines(
         base_url=base_url,
