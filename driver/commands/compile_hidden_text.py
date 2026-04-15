@@ -579,25 +579,6 @@ def _paragraphize_hidden_text(
     return _restore_hidden_placeholders("\n".join(parts), placeholder_html)
 
 
-def build_hidden_text(
-    inner_hidden: str,
-    remaining_links: List[Tuple[str, str]],
-    remaining_inline_raws: List[str],
-    remaining_block_raws: List[str],
-    asset_hash: str,
-    last_revision_date: Optional[str],
-    last_revision_url: Optional[str],
-) -> str:
-    _ = (
-        asset_hash,
-        remaining_links,
-        remaining_inline_raws,
-        remaining_block_raws,
-        last_revision_date,
-        last_revision_url,
-    )
-
-    return inner_hidden
 
 
 def _extract_inner_hidden_text(extracted_hidden: str) -> str:
@@ -680,12 +661,4 @@ def build_final_hidden_text(
         block_placeholders | heading_placeholders | table_placeholders,
         post_subtitle,
     )
-    return build_hidden_text(
-        paragraphized_hidden_text,
-        remaining_links,
-        remaining_inline_raws,
-        remaining_block_raws,
-        asset_hash,
-        last_revision_date,
-        last_revision_url,
-    )
+    return paragraphized_hidden_text

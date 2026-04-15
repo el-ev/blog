@@ -35,7 +35,7 @@ from .submission_workspace import (
     stage_workspace_if_needed,
     write_workspace_manifest,
 )
-from .utils import minify_html_file, rewrite_script_src, rewrite_stylesheet_href, safe_join_child
+from .utils import minify_html_file, safe_join_child
 
 
 def _backup_existing_destination(
@@ -165,19 +165,6 @@ def _submit_to_destination(
             global_glyph_map_path=asset_context.global_glyph_map_path,
             rss_feed_path=os.path.join(args.root_dir, "rss.xml"),
             og_url=meta_og_url,
-        )
-
-        rewrite_stylesheet_href(
-            os.path.join(dest_dir, "index.html"),
-            asset_context.web_assets.stylesheet_path,
-        )
-        rewrite_script_src(
-            os.path.join(dest_dir, "index.html"),
-            asset_context.web_assets.clipboard_script_path,
-        )
-        rewrite_script_src(
-            os.path.join(dest_dir, "index.html"),
-            asset_context.web_assets.theme_script_path,
         )
 
         write_workspace_manifest(

@@ -4,11 +4,10 @@ import sys
 import tempfile
 from argparse import Namespace
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 from .compile_hidden_text import (
     build_final_hidden_text,
-    build_hidden_text,
     replace_hidden_block,
 )
 from .shared import (
@@ -141,9 +140,6 @@ def _compile_initial_post_html(
     base_dir: str,
     driver_source_bytes: bytes,
     asset_hash: str,
-    source_links: List[Tuple[str, str]],
-    last_revision_date: Optional[str],
-    last_revision_url: Optional[str],
     input_values_svg: Dict[str, str],
     input_values_pdf: Dict[str, str],
     raw_copy_html: str,
@@ -160,15 +156,7 @@ def _compile_initial_post_html(
     inline_style: str = "",
     inline_script: str = "",
 ) -> str:
-    initial_hidden_text = build_hidden_text(
-        "",
-        source_links,
-        [],
-        [],
-        asset_hash,
-        last_revision_date,
-        last_revision_url,
-    )
+    initial_hidden_text = ""
     compile_and_build_html(
         source_bytes=driver_source_bytes,
         output_dir=output_dir,
@@ -299,9 +287,6 @@ def run_compile(args: Namespace) -> None:
             base_dir=base_dir,
             driver_source_bytes=driver_source_bytes,
             asset_hash=asset_hash,
-            source_links=source_links,
-            last_revision_date=last_revision_date,
-            last_revision_url=last_revision_url,
             input_values_svg=input_values_svg,
             input_values_pdf=input_values_pdf,
             raw_copy_html=raw_copy_html,

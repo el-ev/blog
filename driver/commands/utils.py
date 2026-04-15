@@ -1187,62 +1187,49 @@ def extract_pdf_text(
     return title, hidden_text
 
 
-def rewrite_script_src(html_path: str, script_asset_path: str) -> bool:
+def _rewrite_html_asset_href(
+    html_path: str, asset_path: str, tag_pattern: str
+) -> bool:
     if not os.path.isfile(html_path):
         return False
-
-    script_name = os.path.basename(script_asset_path)
-    if not script_name:
+    asset_name = os.path.basename(asset_path)
+    if not asset_name:
         return False
-
     with open(html_path, "r", encoding="utf-8") as f:
         html_content = f.read()
-
-    script_src = build_relative_href(
-        os.path.dirname(html_path),
-        script_asset_path,
-    )
+    href = build_relative_href(os.path.dirname(html_path), asset_path)
+    name_parts = asset_name.split(".")
+    if len(name_parts) >= 3:
+        name_pattern = (
+            re.escape(name_parts[0])
+            + r"\.[^.]+\."
+            + re.escape(".".join(name_parts[2:]))
+        )
+    else:
+        name_pattern = re.escape(asset_name)
     updated_html = re.sub(
-        rf'(<script[^>]*\ssrc=")[^"]*{re.escape(script_name)}(")',
-        rf"\1{script_src}\2",
+        tag_pattern.format(name_pattern),
+        rf"\1{href}\2",
         html_content,
         count=1,
     )
     if updated_html == html_content:
         return False
-
     with open(html_path, "w", encoding="utf-8") as f:
         f.write(updated_html)
     return True
+
+
+def rewrite_script_src(html_path: str, script_asset_path: str) -> bool:
+    return _rewrite_html_asset_href(
+        html_path, script_asset_path, r'(<script[^>]*\ssrc=")[^"]*{}(")'
+    )
 
 
 def rewrite_stylesheet_href(html_path: str, stylesheet_asset_path: str) -> bool:
-    if not os.path.isfile(html_path):
-        return False
-
-    stylesheet_name = os.path.basename(stylesheet_asset_path)
-    if not stylesheet_name:
-        return False
-
-    with open(html_path, "r", encoding="utf-8") as f:
-        html_content = f.read()
-
-    stylesheet_href = build_relative_href(
-        os.path.dirname(html_path),
-        stylesheet_asset_path,
+    return _rewrite_html_asset_href(
+        html_path, stylesheet_asset_path, r'(<link[^>]*\shref=")[^"]*{}(")'
     )
-    updated_html = re.sub(
-        rf'(<link[^>]*\shref=")[^"]*{re.escape(stylesheet_name)}(")',
-        rf"\1{stylesheet_href}\2",
-        html_content,
-        count=1,
-    )
-    if updated_html == html_content:
-        return False
-
-    with open(html_path, "w", encoding="utf-8") as f:
-        f.write(updated_html)
-    return True
 
 
 def _extract_first_glyph_symbol_id(glyph_asset_path: str) -> Optional[str]:
@@ -2476,10 +2463,7 @@ def build_html_from_svgs(
 
     glyph_asset_path: Optional[str] = None
     if enable_shared_glyph_extraction:
-        if glyph_scope_key is None:
-            glyph_scope = svg_name_prefix
-        else:
-            glyph_scope = glyph_scope_key
+        glyph_scope = glyph_scope_key or svg_name_prefix
         glyph_asset_path = _extract_and_rewrite_shared_svg_glyphs(
             patched_svg_paths,
             dest_dir=dest_dir,
