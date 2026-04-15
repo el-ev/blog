@@ -22,7 +22,6 @@ from .submission_flow import (
 from .submission_meta import (
     build_meta_fields,
     compile_meta_page,
-    extract_post_headers,
     extract_post_pdf_name,
     load_meta_fields,
 )
@@ -34,7 +33,13 @@ from .submission_workspace import (
     stage_workspace_if_needed,
     write_workspace_manifest,
 )
-from .utils import make_temp_dir, minify_html_file, safe_join_child
+from .utils import (
+    extract_declared_typst_string,
+    extract_required_declared_typst_string,
+    make_temp_dir,
+    minify_html_file,
+    safe_join_child,
+)
 
 
 def _backup_existing_destination(
@@ -119,10 +124,9 @@ def _submit_to_destination(
         source_dest_dir = os.path.join(dest_dir, "source")
         sync_snapshot_from_workspace(staged_workspace_path, source_dest_dir)
 
-        post_title, post_subtitle = extract_post_headers(
-            os.path.join(staged_workspace_path, "main.typ"),
-            workspace_name,
-        )
+        main_typ_path = os.path.join(staged_workspace_path, "main.typ")
+        post_title = extract_required_declared_typst_string(main_typ_path, "title")
+        post_subtitle = extract_declared_typst_string(main_typ_path, "subtitle")
         pdf_name, post_asset_hash = extract_post_pdf_name(dest_dir)
 
         meta_generated_at: Optional[str] = None

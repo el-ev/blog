@@ -19,6 +19,7 @@ from .utils import (
     build_raw_copy_assets,
     compile_and_build_html,
     extract_declared_typst_string,
+    extract_required_declared_typst_string,
     extract_typst_headings_from_content,
     extract_typst_links,
     extract_typst_raws_from_content,
@@ -245,8 +246,9 @@ def run_compile(args: Namespace) -> None:
             base_dir,
             workspace_path,
         )
-        post_title = (
-            extract_declared_typst_string(main_typ_abs_path, "title") or workspace_name
+        post_title = extract_required_declared_typst_string(
+            main_typ_abs_path,
+            "title",
         )
         post_subtitle = extract_declared_typst_string(main_typ_abs_path, "subtitle")
 

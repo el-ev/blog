@@ -5,7 +5,7 @@ from argparse import ArgumentParser, BooleanOptionalAction, Namespace
 from commands.init import run_init
 from commands.compile import run_compile
 from commands.submit import run_submit, run_amend_all
-from commands.update import run_update
+from commands.content import update_content
 from commands.upload import run_upload
 from commands.recover import run_recover
 from commands.serve import run_serve
@@ -151,7 +151,7 @@ def main() -> None:
         "submit": run_submit,
         "amend-all": run_amend_all,
         "recover": run_recover,
-        "update": run_update,
+        "update": update_content,
         "upload": run_upload,
         "serve": run_serve,
     }

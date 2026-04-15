@@ -18,16 +18,6 @@ _META_CODE_FIELD_PATTERN = re.compile(
     r"<li>\s*([^:<]+):\s*<code>(.*?)</code>\s*</li>",
     re.IGNORECASE | re.DOTALL,
 )
-
-
-def extract_post_headers(
-    main_typ_path: str, fallback_title: str
-) -> Tuple[str, Optional[str]]:
-    title = extract_declared_typst_string(main_typ_path, "title") or fallback_title
-    subtitle = extract_declared_typst_string(main_typ_path, "subtitle")
-    return title, subtitle
-
-
 def extract_post_pdf_name(post_dir: str) -> Tuple[str, str]:
     asset_dir = os.path.join(post_dir, "assets")
     if not os.path.isdir(asset_dir):

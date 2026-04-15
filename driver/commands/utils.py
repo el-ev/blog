@@ -420,14 +420,23 @@ def extract_declared_typst_string_from_source(source: str, name: str) -> Optiona
     return value
 
 
+def extract_required_declared_typst_string_from_source(source: str, name: str) -> str:
+    value = extract_declared_typst_string_from_source(source, name)
+    if value is None:
+        raise RuntimeError(f"Missing required {name} declaration in Typst source.")
+    return value
+
+
 def extract_declared_typst_string(path: str, name: str) -> Optional[str]:
-    if not os.path.isfile(path):
-        return None
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return extract_declared_typst_string_from_source(f.read(), name)
-    except (OSError, UnicodeDecodeError):
-        return None
+    with open(path, "r", encoding="utf-8") as f:
+        return extract_declared_typst_string_from_source(f.read(), name)
+
+
+def extract_required_declared_typst_string(path: str, name: str) -> str:
+    value = extract_declared_typst_string(path, name)
+    if value is None:
+        raise RuntimeError(f"Missing required {name} declaration in '{path}'.")
+    return value
 
 
 def _remove_stale_hashed_assets(
@@ -1291,18 +1300,6 @@ def _rewrite_html_asset_href(
     return True
 
 
-def rewrite_script_src(html_path: str, script_asset_path: str) -> bool:
-    return _rewrite_html_asset_href(
-        html_path, script_asset_path, r'(<script[^>]*\ssrc=")[^"]*{}(")'
-    )
-
-
-def rewrite_stylesheet_href(html_path: str, stylesheet_asset_path: str) -> bool:
-    return _rewrite_html_asset_href(
-        html_path, stylesheet_asset_path, r'(<link[^>]*\shref=")[^"]*{}(")'
-    )
-
-
 def _extract_first_glyph_symbol_id(glyph_asset_path: str) -> Optional[str]:
     if not os.path.isfile(glyph_asset_path):
         return None
@@ -1463,93 +1460,18 @@ def _load_global_glyph_registry(map_path: str) -> Dict[str, Any]:
     with open(map_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
-    if not isinstance(data, dict):
-        raise RuntimeError("Invalid glyph map payload: expected object root.")
-
-    symbols_raw = data["symbols"]
-    fingerprint_to_short_raw = data["fingerprint_to_short"]
-    typst_id_to_short_raw = data["typst_id_to_short"]
-    next_short_index = data["next_short_index"]
-    version = data["version"]
-
-    if not isinstance(symbols_raw, dict):
-        raise RuntimeError("Invalid glyph map payload: 'symbols' must be object.")
-    if not isinstance(fingerprint_to_short_raw, dict):
-        raise RuntimeError(
-            "Invalid glyph map payload: 'fingerprint_to_short' must be object."
-        )
-    if not isinstance(typst_id_to_short_raw, dict):
-        raise RuntimeError(
-            "Invalid glyph map payload: 'typst_id_to_short' must be object."
-        )
-    if not isinstance(next_short_index, int) or next_short_index <= 0:
-        raise RuntimeError(
-            "Invalid glyph map payload: 'next_short_index' must be positive integer."
-        )
-    if not isinstance(version, int):
-        raise RuntimeError("Invalid glyph map payload: 'version' must be integer.")
-
-    symbols: Dict[str, Dict[str, str]] = {}
-    for short_id, payload in symbols_raw.items():
-        if not isinstance(short_id, str) or not isinstance(payload, dict):
-            raise RuntimeError("Invalid glyph map payload: malformed symbol entry.")
-
-        fingerprint = payload["fingerprint"]
-        attrs = payload["attrs"]
-        body = payload["body"]
-        if not isinstance(fingerprint, str):
-            raise RuntimeError("Invalid glyph map payload: symbol fingerprint invalid.")
-        if not isinstance(attrs, str) or not isinstance(body, str):
-            raise RuntimeError("Invalid glyph map payload: symbol body/attrs invalid.")
-        if _SVG_EXTERNAL_GLYPH_REF_PATTERN.search(body):
-            raise RuntimeError("Invalid glyph map payload: external glyph refs found.")
-        symbols[short_id] = {
-            "fingerprint": fingerprint,
-            "attrs": attrs,
-            "body": body,
-        }
-
-    fingerprint_to_short: Dict[str, str] = {}
-    for fingerprint, short_id in fingerprint_to_short_raw.items():
-        if not isinstance(fingerprint, str) or not isinstance(short_id, str):
-            raise RuntimeError(
-                "Invalid glyph map payload: malformed fingerprint_to_short entry."
-            )
-        if short_id not in symbols:
-            raise RuntimeError(
-                "Invalid glyph map payload: fingerprint_to_short references unknown symbol."
-            )
-        fingerprint_to_short[fingerprint] = short_id
-
-    typst_id_to_short: Dict[str, str] = {}
-    for typst_id, short_id in typst_id_to_short_raw.items():
-        if not isinstance(typst_id, str) or not isinstance(short_id, str):
-            raise RuntimeError(
-                "Invalid glyph map payload: malformed typst_id_to_short entry."
-            )
-        if short_id not in symbols:
-            raise RuntimeError(
-                "Invalid glyph map payload: typst_id_to_short references unknown symbol."
-            )
-        typst_id_to_short[typst_id] = short_id
-
     return {
-        "version": version,
+        "version": data["version"],
         "typst_version": current_typst_version,
-        "next_short_index": next_short_index,
-        "symbols": symbols,
-        "fingerprint_to_short": fingerprint_to_short,
-        "typst_id_to_short": typst_id_to_short,
+        "next_short_index": data["next_short_index"],
+        "symbols": data["symbols"],
+        "fingerprint_to_short": data["fingerprint_to_short"],
+        "typst_id_to_short": data["typst_id_to_short"],
     }
 
 
 def _allocate_next_short_id(registry: Dict[str, Any]) -> str:
     next_short_index = registry["next_short_index"]
-    if not isinstance(next_short_index, int) or next_short_index <= 0:
-        raise RuntimeError(
-            "Invalid glyph registry: 'next_short_index' must be integer."
-        )
-
     short_id = f"g{_to_base36(next_short_index)}"
     registry["next_short_index"] = next_short_index + 1
     return short_id

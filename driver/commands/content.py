@@ -15,7 +15,8 @@ from .utils import (
     reset_directory,
     compile_and_build_html,
     extract_declared_typst_string,
-    extract_declared_typst_string_from_source,
+    extract_required_declared_typst_string,
+    extract_required_declared_typst_string_from_source,
     hash_text_with_sources,
     minify_html_file,
 )
@@ -29,14 +30,6 @@ _REVISION_SUFFIX_PATTERN = re.compile(r"-(\d+)$")
 
 def _is_internal_post_entry(post_dir_name: str) -> bool:
     return post_dir_name.startswith(".")
-
-
-def _extract_post_title(main_typ_path: str, fallback: str) -> str:
-    return extract_declared_typst_string(main_typ_path, "title") or fallback
-
-
-def _extract_post_subtitle(main_typ_path: str) -> Optional[str]:
-    return extract_declared_typst_string(main_typ_path, "subtitle")
 
 
 def _append_revision_suffix(post_dir_name: str, title: str) -> str:
@@ -56,12 +49,9 @@ def _collect_day_posts(date_dir: str, date_str: str) -> List[PostEntry]:
             continue
 
         main_typ_path = os.path.join(post_path, "source", "main.typ")
-        title = _extract_post_title(
-            main_typ_path,
-            fallback=post_dir_name,
-        )
+        title = extract_required_declared_typst_string(main_typ_path, "title")
         title = _append_revision_suffix(post_dir_name, title)
-        subtitle = _extract_post_subtitle(main_typ_path)
+        subtitle = extract_declared_typst_string(main_typ_path, "subtitle")
 
         day_posts.append(
             {
@@ -213,15 +203,13 @@ def update_content(args: Namespace) -> None:
     with open(content_template_path, "r", encoding="utf-8") as f:
         content_template = f.read()
 
-    parsed_title = extract_declared_typst_string_from_source(content_template, "title")
-    if parsed_title is None:
-        raise RuntimeError("Missing required title declaration in content template.")
-
-    parsed_subtitle = extract_declared_typst_string_from_source(
+    parsed_title = extract_required_declared_typst_string_from_source(
+        content_template,
+        "title",
+    )
+    parsed_subtitle = extract_required_declared_typst_string_from_source(
         content_template, "subtitle"
     )
-    if parsed_subtitle is None:
-        raise RuntimeError("Missing required subtitle declaration in content template.")
 
     posts_typst_lines: List[str] = []
     for date_str, day_posts in posts_by_date.items():

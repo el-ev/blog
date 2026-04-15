@@ -97,7 +97,7 @@
   link("#action=" + action + label_metadata + role_metadata + tabindex_metadata)[#body]
 }
 
-#let a11y_copy_action(body, text, skip_tab: false) = {
+#let copy_action(body, text, skip_tab: false) = {
   show underline: it => it.body
   action(
     "copy:" + bytes-to-hex(sha1(bytes(text))).slice(0, 10),
@@ -124,7 +124,7 @@
         ],
       )
       if raw_copy_enabled {
-        a11y_copy_action(content, it.text)
+        copy_action(content, it.text)
       } else {
         content
       }
@@ -134,7 +134,7 @@
         #it
       ]
       if raw_copy_enabled {
-        a11y_copy_action(content, it.text, skip_tab: true)
+        copy_action(content, it.text, skip_tab: true)
       } else {
         content
       }
