@@ -2368,11 +2368,46 @@ def _convert_to_webp(src_bytes: bytes, dst_path: str) -> None:
         img.save(dst_path, "webp", quality=85)
 
 
+def _build_generated_driver_image_name(image_index: int, asset_hash: str) -> str:
+    return f"image{image_index}.{asset_hash}.webp"
+
+
+def _is_generated_driver_image_asset(filename: str) -> bool:
+    parts = filename.split(".")
+    if len(parts) < 3 or parts[-1] != "webp":
+        return False
+    digest = parts[-2]
+    return (
+        len(digest) == _ASSET_HASH_LENGTH
+        and all(ch in "0123456789abcdef" for ch in digest)
+    )
+
+
+def _remove_stale_generated_driver_image_assets(
+    asset_dir: str,
+    keep_filenames: Set[str],
+) -> None:
+    if not os.path.isdir(asset_dir):
+        return
+
+    for filename in os.listdir(asset_dir):
+        if filename in keep_filenames or not _is_generated_driver_image_asset(filename):
+            continue
+
+        target_path = os.path.join(asset_dir, filename)
+        if os.path.isfile(target_path):
+            try:
+                os.remove(target_path)
+            except FileNotFoundError:
+                continue
+
+
 def _replace_driver_image_anchors(
     svg_data: str,
     image_source_dir: str,
     svg_dest_dir: str,
     asset_hash: str,
+    image_asset_names: Dict[str, str],
 ) -> str:
     def _rewrite(match: re.Match) -> str:
         attrs = match.group("attrs")
@@ -2409,8 +2444,13 @@ def _replace_driver_image_anchors(
             print(f"driver-image: source not found: {src_path!r}", file=sys.stderr)
             return match.group(0)
 
-        stem = os.path.splitext(os.path.basename(image_rel))[0]
-        webp_name = f"{stem}.{asset_hash}.webp"
+        webp_name = image_asset_names.get(image_rel)
+        if webp_name is None:
+            webp_name = _build_generated_driver_image_name(
+                len(image_asset_names) + 1,
+                asset_hash,
+            )
+            image_asset_names[image_rel] = webp_name
         dst_path = os.path.join(svg_dest_dir, webp_name)
         if not os.path.exists(dst_path):
             with open(src_path, "rb") as f:
@@ -2433,6 +2473,7 @@ def patch_svg_file(
     href_base_dir: Optional[str] = None,
     image_source_dir: Optional[str] = None,
     asset_hash: Optional[str] = None,
+    image_asset_names: Optional[Dict[str, str]] = None,
 ) -> None:
     with open(src_path, "r", encoding="utf-8") as svg_file:
         svg_data = svg_file.read()
@@ -2492,12 +2533,17 @@ def patch_svg_file(
     svg_data = _inject_svg_theme_classes(svg_data)
     svg_data = _inject_svg_theme_style(svg_data)
 
-    if image_source_dir is not None and asset_hash is not None:
+    if (
+        image_source_dir is not None
+        and asset_hash is not None
+        and image_asset_names is not None
+    ):
         svg_data = _replace_driver_image_anchors(
             svg_data,
             image_source_dir=image_source_dir,
             svg_dest_dir=os.path.dirname(dst_path),
             asset_hash=asset_hash,
+            image_asset_names=image_asset_names,
         )
 
     with open(dst_path, "w", encoding="utf-8") as svg_file:
@@ -2572,6 +2618,7 @@ def build_html_from_svgs(
     patched_svg_paths: List[str] = []
     os.makedirs(dest_dir, exist_ok=True)
     os.makedirs(page_asset_dir, exist_ok=True)
+    image_asset_names: Dict[str, str] = {}
 
     svg_files = sorted(
         f for f in os.listdir(output_dir) if _is_generated_svg(f, svg_name_prefix)
@@ -2604,11 +2651,18 @@ def build_html_from_svgs(
             href_base_dir=html_dir,
             image_source_dir=image_source_dir,
             asset_hash=asset_hash,
+            image_asset_names=image_asset_names,
         )
         patched_svg_paths.append(dst_path)
 
         page_title = title_format.replace("{i}", str(i))
         page_render_items.append((dst_path, page_title))
+
+    if image_source_dir is not None and asset_hash is not None:
+        _remove_stale_generated_driver_image_assets(
+            page_asset_dir,
+            keep_filenames=set(image_asset_names.values()),
+        )
 
     glyph_asset_path: Optional[str] = None
     if enable_shared_glyph_extraction:
