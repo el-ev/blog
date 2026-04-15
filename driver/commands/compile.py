@@ -26,6 +26,7 @@ from .utils import (
     extract_typst_tables_from_content,
     find_latest_revision,
     make_temp_dir,
+    minify_html_file,
     reset_directory,
     safe_join_child,
     sources_hash,
@@ -353,6 +354,7 @@ def run_compile(args: Namespace) -> None:
             old_hidden_text=initial_hidden_text,
             new_hidden_text=final_hidden_text_override,
         )
+        minify_html_file(index_path)
 
         copied_files = _copy_workspace_public_files(workspace_path, public_output_dir)
         if copied_files:
