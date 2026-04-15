@@ -467,6 +467,11 @@ def run_compile(args: Namespace) -> None:
             asset_hash,
             last_revision_date,
             last_revision_url,
+            nav_links=[
+                ("../../../index.html", "Contents"),
+                ("meta.html", "Meta"),
+                (f"./assets/post.{asset_hash}.pdf", "PDF"),
+            ],
         )
 
         index_path = os.path.join(html_output_dir, "index.html")

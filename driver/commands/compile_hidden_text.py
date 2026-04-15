@@ -666,6 +666,7 @@ def build_final_hidden_text(
     asset_hash: str,
     last_revision_date: Optional[str],
     last_revision_url: Optional[str],
+    nav_links: Optional[List[Tuple[str, str]]] = None,
 ) -> str:
     _, extracted_hidden = extract_pdf_text(
         post_pdf_path,
@@ -707,4 +708,13 @@ def build_final_hidden_text(
         block_placeholders | heading_placeholders | table_placeholders,
         post_subtitle,
     )
+    if nav_links:
+        nav_items = "".join(
+            f'<a href="{html.escape(href, quote=True)}" tabindex="-1">'
+            f"{html.escape(label)}</a>"
+            for href, label in nav_links
+        )
+        paragraphized_hidden_text += (
+            f'\n<nav aria-label="Post navigation">{nav_items}</nav>'
+        )
     return paragraphized_hidden_text
