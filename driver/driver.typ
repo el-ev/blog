@@ -15,6 +15,21 @@
 
 #let subtitle = none
 
+#show image: it => {
+  if _driver_is_svg_export() {
+    layout(size => {
+      let dims = measure(block(width: size.width)[
+        #show image: img => img
+        #it
+      ])
+      link("driver-image://" + it.source,
+           rect(width: dims.width, height: dims.height, fill: none, stroke: none))
+    })
+  } else {
+    it
+  }
+}
+
 // IMPORT_MAIN
 
 #show: article.with(title: title, subtitle: subtitle, top_bar: top_bar, date: article_date)

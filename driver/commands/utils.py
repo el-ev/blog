@@ -2359,11 +2359,80 @@ def _optimize_svg_with_normalized_href(
     _normalize_svg_href_file(svg_path)
 
 
+def _convert_to_webp(src_bytes: bytes, dst_path: str) -> None:
+    import io
+
+    from PIL import Image  # type: ignore[import]
+
+    with Image.open(io.BytesIO(src_bytes)) as img:
+        img.save(dst_path, "webp", quality=85)
+
+
+def _replace_driver_image_anchors(
+    svg_data: str,
+    image_source_dir: str,
+    svg_dest_dir: str,
+    asset_hash: str,
+) -> str:
+    def _rewrite(match: re.Match) -> str:
+        attrs = match.group("attrs")
+        body = match.group("body")
+
+        href_match = re.search(r"(?:xlink:)?href\s*=\s*['\"]([^'\"]+)['\"]", attrs)
+        if href_match is None:
+            return match.group(0)
+        href = href_match.group(1)
+
+        parsed = urlparse(href)
+        if parsed.scheme != "driver-image":
+            return match.group(0)
+
+        image_rel = unquote(parsed.netloc + parsed.path)
+
+        w_h = re.search(
+            r'<rect\b[^>]*\bwidth=["\']([^"\']+)["\'][^>]*\bheight=["\']([^"\']+)["\']',
+            body,
+        )
+        h_w = re.search(
+            r'<rect\b[^>]*\bheight=["\']([^"\']+)["\'][^>]*\bwidth=["\']([^"\']+)["\']',
+            body,
+        )
+        if w_h:
+            width, height = w_h.group(1), w_h.group(2)
+        elif h_w:
+            width, height = h_w.group(2), h_w.group(1)
+        else:
+            return match.group(0)
+
+        src_path = os.path.join(image_source_dir, image_rel)
+        if not os.path.isfile(src_path):
+            print(f"driver-image: source not found: {src_path!r}", file=sys.stderr)
+            return match.group(0)
+
+        stem = os.path.splitext(os.path.basename(image_rel))[0]
+        webp_name = f"{stem}.{asset_hash}.webp"
+        dst_path = os.path.join(svg_dest_dir, webp_name)
+        if not os.path.exists(dst_path):
+            with open(src_path, "rb") as f:
+                _convert_to_webp(f.read(), dst_path)
+
+        return f'<image href="{webp_name}" width="{width}" height="{height}"/>'
+
+    return re.sub(
+        r"<a(?P<attrs>[^>]*)>(?P<body>.*?)</a>",
+        _rewrite,
+        svg_data,
+        flags=re.DOTALL,
+    )
+
+
 def patch_svg_file(
     src_path: str,
     dst_path: str,
     svg_href_rewrites: Optional[Dict[str, str]],
     href_base_dir: Optional[str] = None,
+    image_source_dir: Optional[str] = None,
+    asset_hash: Optional[str] = None,
 ) -> None:
     with open(src_path, "r", encoding="utf-8") as svg_file:
         svg_data = svg_file.read()
@@ -2423,6 +2492,14 @@ def patch_svg_file(
     svg_data = _inject_svg_theme_classes(svg_data)
     svg_data = _inject_svg_theme_style(svg_data)
 
+    if image_source_dir is not None and asset_hash is not None:
+        svg_data = _replace_driver_image_anchors(
+            svg_data,
+            image_source_dir=image_source_dir,
+            svg_dest_dir=os.path.dirname(dst_path),
+            asset_hash=asset_hash,
+        )
+
     with open(dst_path, "w", encoding="utf-8") as svg_file:
         svg_file.write(svg_data)
 
@@ -2481,6 +2558,8 @@ def build_html_from_svgs(
     global_glyph_map_path: Optional[str] = None,
     inline_style: str = "",
     inline_script: str = "",
+    image_source_dir: Optional[str] = None,
+    asset_hash: Optional[str] = None,
 ) -> str:
     with open(template_path, "r", encoding="utf-8") as f:
         template = f.read()
@@ -2523,6 +2602,8 @@ def build_html_from_svgs(
             dst_path,
             svg_href_rewrites,
             href_base_dir=html_dir,
+            image_source_dir=image_source_dir,
+            asset_hash=asset_hash,
         )
         patched_svg_paths.append(dst_path)
 
@@ -2696,6 +2777,7 @@ def compile_and_build_html(
     global_glyph_map_path: Optional[str] = None,
     inline_style: str = "",
     inline_script: str = "",
+    image_source_dir: Optional[str] = None,
 ) -> str:
     svg_prefix = f"{svg_name_prefix}{{0p}}.{asset_hash}.svg"
     pdf_name = f"{file_prefix}.{asset_hash}.pdf"
@@ -2749,4 +2831,6 @@ def compile_and_build_html(
         global_glyph_map_path=global_glyph_map_path,
         inline_style=inline_style,
         inline_script=inline_script,
+        image_source_dir=image_source_dir,
+        asset_hash=asset_hash,
     )

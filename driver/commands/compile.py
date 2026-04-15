@@ -156,6 +156,7 @@ def _compile_initial_post_html(
     global_glyph_map_path: Optional[str] = None,
     inline_style: str = "",
     inline_script: str = "",
+    image_source_dir: Optional[str] = None,
 ) -> str:
     initial_hidden_text = ""
     pdf_href = (
@@ -191,6 +192,7 @@ def _compile_initial_post_html(
         global_glyph_map_path=global_glyph_map_path,
         inline_style=inline_style,
         inline_script=inline_script,
+        image_source_dir=image_source_dir,
     )
     return initial_hidden_text
 
@@ -325,6 +327,7 @@ def run_compile(args: Namespace) -> None:
             global_glyph_map_path=asset_context.global_glyph_map_path,
             inline_style=asset_context.web_assets.inline_style,
             inline_script=asset_context.web_assets.inline_script,
+            image_source_dir=workspace_path,
         )
 
         post_pdf_path = os.path.join(output_dir, f"post.{asset_hash}.pdf")
