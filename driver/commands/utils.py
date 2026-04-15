@@ -731,7 +731,7 @@ def run_typst_compile(
         raise RuntimeError(f"Typst compilation failed. Exit code {e.returncode}") from e
 
 
-def _resolve_creation_timestamp(inputs: Optional[Dict[str, str]]) -> Optional[str]:
+def _resolve_pdf_creation_timestamp(inputs: Optional[Dict[str, str]]) -> Optional[str]:
     if not inputs:
         return None
 
@@ -2766,15 +2766,21 @@ def compile_and_build_html(
     inline_script: str = "",
     image_source_dir: Optional[str] = None,
 ) -> str:
+    display_compiled_date = datetime.now().strftime("%Y-%m-%d")
+    resolved_inputs_svg = dict(inputs_svg) if inputs_svg is not None else {}
+    resolved_inputs_pdf = dict(inputs_pdf) if inputs_pdf is not None else {}
+    resolved_inputs_svg.setdefault("display_compiled_date", display_compiled_date)
+    resolved_inputs_pdf.setdefault("display_compiled_date", display_compiled_date)
+
     svg_prefix = f"{svg_name_prefix}{{0p}}.{asset_hash}.svg"
     pdf_name = f"{file_prefix}.{asset_hash}.pdf"
-    pdf_creation_timestamp = _resolve_creation_timestamp(inputs_pdf)
+    pdf_creation_timestamp = _resolve_pdf_creation_timestamp(resolved_inputs_pdf)
 
     run_typst_compile(
         source_bytes,
         os.path.join(output_dir, svg_prefix),
         export_format="svg",
-        inputs=inputs_svg,
+        inputs=resolved_inputs_svg,
     )
 
     pdf_path = os.path.join(output_dir, pdf_name)
@@ -2782,7 +2788,7 @@ def compile_and_build_html(
         source_bytes,
         pdf_path,
         export_format="pdf",
-        inputs=inputs_pdf,
+        inputs=resolved_inputs_pdf,
         creation_timestamp=pdf_creation_timestamp,
     )
 

@@ -1,5 +1,10 @@
 #import "@preview/digestify:0.1.0": bytes-to-hex, sha1
 
+#let display_compiled_date = sys.inputs.at(
+  "display_compiled_date",
+  default: datetime.today().display("[year]-[month]-[day]"),
+)
+
 #let justify_align(left_body, right_body) = {
   block(
     width: 100%,
@@ -46,7 +51,7 @@
     footer: [
       #set text(fill: gray, size: 10pt)
       #justify_align(
-        smallcaps(datetime.today().display("Compiled on [year]-[month]-[day]")),
+        smallcaps("Compiled on " + display_compiled_date),
         context counter(page).display(),
       )
     ],
