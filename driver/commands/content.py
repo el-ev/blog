@@ -27,6 +27,10 @@ PostsByDate = Dict[str, List[PostEntry]]
 _REVISION_SUFFIX_PATTERN = re.compile(r"-(\d+)$")
 
 
+def _is_internal_post_entry(post_dir_name: str) -> bool:
+    return post_dir_name.startswith(".")
+
+
 def _extract_post_title(main_typ_path: str, fallback: str) -> str:
     return extract_declared_typst_string(main_typ_path, "title") or fallback
 
@@ -45,6 +49,8 @@ def _append_revision_suffix(post_dir_name: str, title: str) -> str:
 def _collect_day_posts(date_dir: str, date_str: str) -> List[PostEntry]:
     day_posts: List[PostEntry] = []
     for post_dir_name in os.listdir(date_dir):
+        if _is_internal_post_entry(post_dir_name):
+            continue
         post_path = os.path.join(date_dir, post_dir_name)
         if not os.path.isdir(post_path):
             continue
@@ -294,6 +300,8 @@ def update_content(args: Namespace) -> None:
         if not os.path.isdir(date_dir):
             continue
         for post_dir_name in os.listdir(date_dir):
+            if _is_internal_post_entry(post_dir_name):
+                continue
             post_path = os.path.join(date_dir, post_dir_name)
             if not os.path.isdir(post_path):
                 continue
@@ -330,11 +338,3 @@ def update_content(args: Namespace) -> None:
     print(f"Content page updated in {root_dir}.")
     print(f"Sitemap generated at {sitemap_path}.")
     print(f"RSS feed generated at {rss_path}.")
-
-def _is_internal_post_entry(post_dir_name: str) -> bool:
-    return post_dir_name.startswith(".")
-
-        if _is_internal_post_entry(post_dir_name):
-            continue
-            if _is_internal_post_entry(post_dir_name):
-                continue
