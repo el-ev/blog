@@ -107,11 +107,6 @@ def build_public_page_url(
         return None
 
     rel_dir = os.path.relpath(dest_abs, start=root_abs).replace("\\", "/")
-    if html_filename == "index.html":
-        if rel_dir == ".":
-            return f"{base_url}/"
-        return f"{base_url}/{rel_dir}/"
-
     if rel_dir == ".":
         return f"{base_url}/{html_filename}"
     return f"{base_url}/{rel_dir}/{html_filename}"
