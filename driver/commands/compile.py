@@ -1,4 +1,6 @@
+import html
 import os
+import re
 import shutil
 import sys
 from argparse import Namespace
@@ -31,6 +33,11 @@ from .utils import (
     safe_join_child,
     sources_hash,
 )
+
+_SITE_TITLE = "Blog"
+_HTML_TAG_PATTERN = re.compile(r"<[^>]+>")
+_PARAGRAPH_PATTERN = re.compile(r"<p\b[^>]*>(.*?)</p>", flags=re.IGNORECASE | re.DOTALL)
+_SENTENCE_PATTERN = re.compile(r".+?(?:[.!?](?=\s|$)|$)")
 
 
 def _copy_workspace_public_files(workspace_path: str, output_dir: str) -> int:
@@ -118,6 +125,120 @@ def _prepare_compile_sources(
         "// IMPORT_MAIN", f'#import "{main_typ_path}": *'
     )
     return driver_source.encode(), main_typ_abs_path, asset_hash
+
+
+def _build_article_head_title(post_title: str, post_subtitle: Optional[str]) -> str:
+    title_parts = [post_title]
+    if post_subtitle:
+        title_parts.append(post_subtitle)
+    title_parts.append(_SITE_TITLE)
+    return " - ".join(title_parts)
+
+
+def _strip_html_text(fragment: str) -> str:
+    text = _HTML_TAG_PATTERN.sub(" ", fragment)
+    text = html.unescape(text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _extract_meta_description(
+    hidden_text: str,
+    fallback_description: str,
+    max_length: int = 220,
+) -> str:
+    candidate_sentences = []
+
+    for paragraph_match in _PARAGRAPH_PATTERN.finditer(hidden_text):
+        paragraph_text = _strip_html_text(paragraph_match.group(1))
+        if not paragraph_text:
+            continue
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", paragraph_text):
+            continue
+
+        for sentence_match in _SENTENCE_PATTERN.finditer(paragraph_text):
+            sentence = sentence_match.group(0).strip()
+            candidate_sentences.append(sentence)
+
+        if candidate_sentences:
+            break
+
+    if not candidate_sentences:
+        return fallback_description
+
+    description = ""
+    for sentence in candidate_sentences:
+        candidate = sentence if not description else f"{description} {sentence}"
+        if len(candidate) > max_length:
+            break
+        description = candidate
+        if len(description) >= max_length // 2:
+            break
+
+    if description:
+        return description
+
+    first_sentence = candidate_sentences[0]
+    if len(first_sentence) <= max_length:
+        return first_sentence
+    return first_sentence[: max_length - 1].rstrip() + "…"
+
+
+def _replace_required_pattern(
+    html_content: str,
+    pattern: str,
+    replacement: str,
+    label: str,
+) -> str:
+    updated_html, replaced = re.subn(pattern, replacement, html_content, count=1)
+    if replaced != 1:
+        raise RuntimeError(f"Expected exactly one {label} tag in article HTML.")
+    return updated_html
+
+
+def _finalize_article_metadata(
+    index_path: str,
+    post_title: str,
+    post_subtitle: Optional[str],
+    hidden_text: str,
+) -> None:
+    final_title = _build_article_head_title(post_title, post_subtitle)
+    fallback_description = post_subtitle or post_title
+    meta_description = _extract_meta_description(hidden_text, fallback_description)
+
+    with open(index_path, "r", encoding="utf-8") as f:
+        html_content = f.read()
+
+    escaped_title = html.escape(final_title, quote=True)
+    escaped_title_text = html.escape(final_title)
+    escaped_description = html.escape(meta_description, quote=True)
+
+    html_content = _replace_required_pattern(
+        html_content,
+        r'<meta name="description" content="[^"]*">',
+        f'<meta name="description" content="{escaped_description}">',
+        "description",
+    )
+    html_content = _replace_required_pattern(
+        html_content,
+        r'<meta property="og:title" content="[^"]*">',
+        f'<meta property="og:title" content="{escaped_title}">',
+        "og:title",
+    )
+    html_content = _replace_required_pattern(
+        html_content,
+        r'<meta property="og:description" content="[^"]*">',
+        f'<meta property="og:description" content="{escaped_description}">',
+        "og:description",
+    )
+    html_content = _replace_required_pattern(
+        html_content,
+        r"<title>.*?</title>",
+        f"<title>{escaped_title_text}</title>",
+        "title",
+    )
+
+    with open(index_path, "w", encoding="utf-8") as f:
+        f.write(html_content)
 
 
 def _stage_workspace_for_compile(
@@ -353,6 +474,12 @@ def run_compile(args: Namespace) -> None:
             index_path=index_path,
             old_hidden_text=initial_hidden_text,
             new_hidden_text=final_hidden_text_override,
+        )
+        _finalize_article_metadata(
+            index_path=index_path,
+            post_title=post_title,
+            post_subtitle=post_subtitle,
+            hidden_text=final_hidden_text_override,
         )
         minify_html_file(index_path)
 
