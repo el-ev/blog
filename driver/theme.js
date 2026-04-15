@@ -18,6 +18,7 @@
         "--svg-code-dark-green",
         "--svg-code-red",
         "--svg-code-blue",
+        "--svg-code-violet",
         "--svg-code-magenta",
         "--svg-muted-stroke",
         "--svg-code-gutter",

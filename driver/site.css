@@ -23,6 +23,7 @@ html {
     --svg-code-dark-green: #1d6c76;
     --svg-code-red: #d73948;
     --svg-code-blue: #4b69c6;
+    --svg-code-violet: #8b41b1;
     --svg-code-magenta: #b60157;
     --svg-muted-stroke: #646464;
     --svg-code-gutter: #787878;
@@ -49,6 +50,7 @@ html {
     --svg-code-dark-green: #74cad3;
     --svg-code-red: #ff8d99;
     --svg-code-blue: #8ca8ff;
+    --svg-code-violet: #c792ea;
     --svg-code-magenta: #e58bff;
     --svg-muted-stroke: #a7b0bf;
     --svg-code-gutter: #6f7783;

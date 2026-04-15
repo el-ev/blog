@@ -55,6 +55,7 @@ _SVG_THEME_FILL_CLASS_MAP: Dict[str, str] = {
     "#1d6c76": "theme-code-dark-green",
     "#d73948": "theme-code-red",
     "#4b69c6": "theme-code-blue",
+    "#8b41b1": "theme-code-violet",
     "#b60157": "theme-code-magenta",
 }
 _SVG_THEME_STROKE_CLASS_MAP: Dict[str, str] = {
@@ -78,6 +79,7 @@ _SVG_THEME_STYLE = """
 .theme-code-dark-green { fill: var(--svg-code-dark-green, #1d6c76) !important; }
 .theme-code-red { fill: var(--svg-code-red, #d73948) !important; }
 .theme-code-blue { fill: var(--svg-code-blue, #4b69c6) !important; }
+.theme-code-violet { fill: var(--svg-code-violet, #8b41b1) !important; }
 .theme-code-magenta { fill: var(--svg-code-magenta, #b60157) !important; }
 .t-stroke { stroke: var(--svg-text, #141414) !important; }
 .theme-muted-stroke { stroke: var(--svg-muted-stroke, #646464) !important; }
