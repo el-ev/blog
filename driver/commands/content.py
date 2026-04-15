@@ -330,3 +330,11 @@ def update_content(args: Namespace) -> None:
     print(f"Content page updated in {root_dir}.")
     print(f"Sitemap generated at {sitemap_path}.")
     print(f"RSS feed generated at {rss_path}.")
+
+def _is_internal_post_entry(post_dir_name: str) -> bool:
+    return post_dir_name.startswith(".")
+
+        if _is_internal_post_entry(post_dir_name):
+            continue
+            if _is_internal_post_entry(post_dir_name):
+                continue
