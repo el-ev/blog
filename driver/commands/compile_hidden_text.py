@@ -25,21 +25,22 @@ def _replace_first_with_options(
     old: str,
     new: str,
     independent_only: bool = False,
-) -> Tuple[str, bool]:
+    search_start: int = 0,
+) -> Tuple[str, bool, int]:
     if not old:
-        return text, False
+        return text, False, -1
 
-    search_start = 0
+    next_search_start = max(search_start, 0)
     while True:
-        idx = text.find(old, search_start)
+        idx = text.find(old, next_search_start)
         if idx < 0:
-            return text, False
+            return text, False, -1
         if not _index_in_hidden_placeholder(text, idx) and (
             not independent_only
             or _is_independent_text_match(text, idx, idx + len(old))
         ):
-            return text[:idx] + new + text[idx + len(old) :], True
-        search_start = idx + 1
+            return text[:idx] + new + text[idx + len(old) :], True, idx
+        next_search_start = idx + 1
 
 
 def _is_independent_text_match(text: str, start: int, end: int) -> bool:
@@ -86,6 +87,7 @@ def _embed_links_in_hidden_text(
 ) -> Tuple[str, List[Tuple[str, str]]]:
     text = inner_hidden
     remaining_links: List[Tuple[str, str]] = []
+    cursor = 0
 
     for href, label in merged_links:
         if not href:
@@ -108,13 +110,15 @@ def _embed_links_in_hidden_text(
                 f'<a href="{safe_href}" tabindex="-1">{escaped_candidate}</a>'
             )
             placeholder = _make_hidden_placeholder(len(placeholder_html))
-            text, replaced = _replace_first_with_options(
+            text, replaced, replaced_at = _replace_first_with_options(
                 text,
                 escaped_candidate,
                 placeholder,
+                search_start=cursor,
             )
             if replaced:
                 placeholder_html.append((placeholder, anchor))
+                cursor = replaced_at + len(placeholder)
                 placed = True
                 break
 
@@ -186,7 +190,7 @@ def _embed_raws_in_hidden_text(
                 if is_block
                 else f"<code>{escaped_candidate}</code>"
             )
-            text, replaced = _replace_first_with_options(
+            text, replaced, _ = _replace_first_with_options(
                 text,
                 escaped_candidate,
                 placeholder,
