@@ -338,6 +338,34 @@ def build_relative_href(from_dir: str, target_path: str) -> str:
     return rel_path
 
 
+def _rebase_relative_href_for_destination(
+    href: str,
+    source_dir: str,
+    dest_dir: str,
+) -> str:
+    if not href:
+        return href
+
+    parsed = urlparse(href)
+    if parsed.scheme or href.startswith(("//", "/", "#")):
+        return href
+
+    normalized_source_dir = os.path.abspath(source_dir)
+    normalized_dest_dir = os.path.abspath(dest_dir)
+    if normalized_source_dir == normalized_dest_dir:
+        return href
+
+    joined_target = os.path.normpath(
+        os.path.join(normalized_source_dir, parsed.path.replace("/", os.sep))
+    )
+    rebased_href = build_relative_href(normalized_dest_dir, joined_target)
+    if parsed.query:
+        rebased_href = f"{rebased_href}?{parsed.query}"
+    if parsed.fragment:
+        rebased_href = f"{rebased_href}#{parsed.fragment}"
+    return rebased_href
+
+
 def extract_declared_typst_string_from_source(source: str, name: str) -> Optional[str]:
     pattern = re.compile(
         _TYPST_DECLARED_STRING_PATTERN_TEMPLATE.format(name=re.escape(name))
@@ -1082,6 +1110,7 @@ def extract_typst_tables_from_content(
 def build_raw_copy_assets(
     raw_entries: List[Tuple[str, bool]],
     asset_dir: Optional[str] = None,
+    html_dir: Optional[str] = None,
 ) -> str:
     if not raw_entries:
         return ""
@@ -1104,9 +1133,15 @@ def build_raw_copy_assets(
     with open(asset_path, "w", encoding="utf-8") as f:
         f.write(json_payload)
 
+    asset_href = (
+        build_relative_href(html_dir, asset_path)
+        if html_dir is not None
+        else f"./{asset_name}"
+    )
+
     return (
         '<script id="copy-data" type="application/json" '
-        f'data-src="./{html.escape(asset_name, quote=True)}"></script>'
+        f'data-src="{html.escape(asset_href, quote=True)}"></script>'
     )
 
 
@@ -2314,6 +2349,7 @@ def patch_svg_file(
     src_path: str,
     dst_path: str,
     svg_href_rewrites: Optional[Dict[str, str]],
+    href_base_dir: Optional[str] = None,
 ) -> None:
     with open(src_path, "r", encoding="utf-8") as svg_file:
         svg_data = svg_file.read()
@@ -2331,6 +2367,12 @@ def patch_svg_file(
         value = match.group("value")
         safe_rewrites = svg_href_rewrites or {}
         rewritten = safe_rewrites.get(value, value)
+        if href_base_dir is not None:
+            rewritten = _rebase_relative_href_for_destination(
+                href=rewritten,
+                source_dir=href_base_dir,
+                dest_dir=os.path.dirname(dst_path),
+            )
         return f"{attr}={quote}{rewritten}{quote}"
 
     svg_data = re.sub(
@@ -2412,6 +2454,7 @@ def build_html_from_svgs(
     revision_html: str = "",
     svg_name_prefix: str = "page",
     html_filename: str = "index.html",
+    asset_dest_dir: Optional[str] = None,
     stylesheet_asset_path: Optional[str] = None,
     clipboard_asset_path: Optional[str] = None,
     theme_asset_path: Optional[str] = None,
@@ -2428,10 +2471,14 @@ def build_html_from_svgs(
     with open(template_path, "r", encoding="utf-8") as f:
         template = f.read()
 
+    index_path = os.path.join(dest_dir, html_filename)
+    html_dir = os.path.dirname(index_path)
+    page_asset_dir = asset_dest_dir or dest_dir
     page_links_list: List[str] = []
     page_render_items: List[Tuple[str, str]] = []
     patched_svg_paths: List[str] = []
     os.makedirs(dest_dir, exist_ok=True)
+    os.makedirs(page_asset_dir, exist_ok=True)
 
     svg_files = sorted(
         f for f in os.listdir(output_dir) if _is_generated_svg(f, svg_name_prefix)
@@ -2440,33 +2487,40 @@ def build_html_from_svgs(
         svg_files = svg_files[:page_count]
 
     current_svg_set = set(svg_files)
-    for filename in os.listdir(dest_dir):
-        if (
-            _is_generated_svg(filename, svg_name_prefix)
-            and filename not in current_svg_set
-        ):
-            os.remove(os.path.join(dest_dir, filename))
+    cleanup_dirs = [page_asset_dir]
+    if os.path.abspath(page_asset_dir) != os.path.abspath(dest_dir):
+        cleanup_dirs.append(dest_dir)
+    for cleanup_dir in cleanup_dirs:
+        if not os.path.isdir(cleanup_dir):
+            continue
+        for filename in os.listdir(cleanup_dir):
+            if (
+                _is_generated_svg(filename, svg_name_prefix)
+                and filename not in current_svg_set
+            ):
+                os.remove(os.path.join(cleanup_dir, filename))
 
     for i, filename in enumerate(svg_files, start=1):
         src_path = os.path.join(output_dir, filename)
-        dst_path = os.path.join(dest_dir, filename)
+        dst_path = os.path.join(page_asset_dir, filename)
 
         patch_svg_file(
             src_path,
             dst_path,
             svg_href_rewrites,
+            href_base_dir=html_dir,
         )
         patched_svg_paths.append(dst_path)
 
         page_title = title_format.replace("{i}", str(i))
-        page_render_items.append((filename, page_title))
+        page_render_items.append((dst_path, page_title))
 
     glyph_asset_path: Optional[str] = None
     if enable_shared_glyph_extraction:
         glyph_scope = glyph_scope_key or svg_name_prefix
         glyph_asset_path = _extract_and_rewrite_shared_svg_glyphs(
             patched_svg_paths,
-            dest_dir=dest_dir,
+            dest_dir=page_asset_dir,
             glyph_scope_key=glyph_scope,
             global_glyph_asset_path=global_glyph_asset_path,
             global_glyph_map_path=global_glyph_map_path,
@@ -2477,9 +2531,10 @@ def build_html_from_svgs(
     if enable_shared_glyph_extraction and glyph_asset_path:
         _optimize_svg_with_normalized_href(glyph_asset_path, preserve_ids=True)
 
-    for filename, page_title in page_render_items:
+    for svg_path, page_title in page_render_items:
+        page_href = build_relative_href(html_dir, svg_path)
         page_links_list.append(
-            f'<object class="page" type="image/svg+xml" data="./{filename}" '
+            f'<object class="page" type="image/svg+xml" data="{html.escape(page_href, quote=True)}" '
             f'title="{page_title}"></object>'
         )
 
@@ -2526,23 +2581,22 @@ def build_html_from_svgs(
     index_content = index_content.replace("{{TOPBAR}}", top_bar_html)
     index_content = index_content.replace("{{REVISION}}", revision_html)
 
-    index_path = os.path.join(dest_dir, html_filename)
     stylesheet_src = ""
     if stylesheet_asset_path:
         stylesheet_src = build_relative_href(
-            os.path.dirname(index_path),
+            html_dir,
             stylesheet_asset_path,
         )
     clipboard_src = ""
     if clipboard_asset_path:
         clipboard_src = build_relative_href(
-            os.path.dirname(index_path),
+            html_dir,
             clipboard_asset_path,
         )
     theme_src = ""
     if theme_asset_path:
         theme_src = build_relative_href(
-            os.path.dirname(index_path),
+            html_dir,
             theme_asset_path,
         )
     index_content = index_content.replace(
@@ -2555,7 +2609,7 @@ def build_html_from_svgs(
     rss_feed_link = ""
     if rss_feed_path:
         rss_feed_href = build_relative_href(
-            os.path.dirname(index_path),
+            html_dir,
             rss_feed_path,
         )
         rss_feed_link = (
@@ -2571,7 +2625,7 @@ def build_html_from_svgs(
         warmup_glyph_asset_path = global_glyph_asset_path
     if warmup_glyph_asset_path:
         glyph_src = build_relative_href(
-            os.path.dirname(index_path),
+            html_dir,
             warmup_glyph_asset_path,
         )
         glyph_symbol_id = _extract_first_glyph_symbol_id(warmup_glyph_asset_path)
@@ -2618,6 +2672,7 @@ def compile_and_build_html(
     svg_href_rewrites: Optional[Dict[str, str]] = None,
     svg_name_prefix: str = "page",
     html_filename: str = "index.html",
+    asset_dest_dir: Optional[str] = None,
     stylesheet_asset_path: Optional[str] = None,
     clipboard_asset_path: Optional[str] = None,
     theme_asset_path: Optional[str] = None,
@@ -2670,6 +2725,7 @@ def compile_and_build_html(
         raw_copy_html=raw_copy_html,
         svg_name_prefix=svg_name_prefix,
         html_filename=html_filename,
+        asset_dest_dir=asset_dest_dir,
         stylesheet_asset_path=stylesheet_asset_path,
         clipboard_asset_path=clipboard_asset_path,
         theme_asset_path=theme_asset_path,

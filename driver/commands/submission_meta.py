@@ -29,9 +29,20 @@ def extract_post_headers(
 
 
 def extract_post_pdf_name(post_dir: str) -> Tuple[str, str]:
-    for filename in sorted(os.listdir(post_dir)):
-        if re.match(r"^post\.[^.]+\.pdf$", filename):
-            return filename, filename[len("post.") : -len(".pdf")]
+    candidate_dirs = []
+    asset_dir = os.path.join(post_dir, "assets")
+    if os.path.isdir(asset_dir):
+        candidate_dirs.append(("assets", asset_dir))
+    candidate_dirs.append(("", post_dir))
+
+    for dir_prefix, current_dir in candidate_dirs:
+        for filename in sorted(os.listdir(current_dir)):
+            if not re.match(r"^post\.[^.]+\.pdf$", filename):
+                continue
+            relative_name = (
+                f"{dir_prefix}/{filename}" if dir_prefix else filename
+            )
+            return relative_name, filename[len("post.") : -len(".pdf")]
     raise RuntimeError(f"Compiled post PDF not found in '{post_dir}'.")
 
 
@@ -157,6 +168,7 @@ def compile_meta_page(
     clipboard_asset_path: str,
     theme_asset_path: str,
     dest_dir: str,
+    asset_dir: Optional[str],
     post_title: str,
     meta_fields: Dict[str, str],
     workspace_files: List[str],
@@ -201,7 +213,8 @@ def compile_meta_page(
     )
     raw_copy_html = build_raw_copy_assets(
         meta_raws,
-        asset_dir=dest_dir,
+        asset_dir=asset_dir,
+        html_dir=dest_dir,
     )
 
     os.makedirs(build_base, exist_ok=True)
@@ -224,6 +237,7 @@ def compile_meta_page(
             raw_copy_html=raw_copy_html,
             svg_name_prefix="meta-page",
             html_filename="meta.html",
+            asset_dest_dir=asset_dir,
             stylesheet_asset_path=stylesheet_asset_path,
             clipboard_asset_path=clipboard_asset_path,
             theme_asset_path=theme_asset_path,

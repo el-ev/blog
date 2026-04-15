@@ -82,6 +82,7 @@ def _submit_to_destination(
     dest_base_dir = os.path.join(posts_dir, date_str)
     os.makedirs(dest_base_dir, exist_ok=True)
     dest_dir = os.path.join(dest_base_dir, dest_dir_name)
+    dest_assets_dir = os.path.join(dest_dir, "assets")
 
     existing_meta_fields: Dict[str, str] = {}
     existing_manifest_data: Dict[str, Any] = {}
@@ -108,7 +109,9 @@ def _submit_to_destination(
         compile_args.workspace_path_override = staged_workspace_path
         compile_args.publish_date_override = date_str
         compile_args.enable_shared_glyph_extraction = False
-        compile_args.output_dir_override = dest_dir
+        compile_args.output_dir_override = dest_assets_dir
+        compile_args.html_output_dir_override = dest_dir
+        compile_args.public_output_dir_override = dest_dir
         run_compile(compile_args)
 
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -158,6 +161,7 @@ def _submit_to_destination(
             inline_style=asset_context.web_assets.inline_style,
             inline_script=asset_context.web_assets.inline_script,
             dest_dir=dest_dir,
+            asset_dir=dest_assets_dir,
             post_title=post_title,
             meta_fields=meta_fields,
             workspace_files=workspace_files,
@@ -179,7 +183,7 @@ def _submit_to_destination(
         if refresh_assets:
             refresh_glyph_assets(
                 root_dir=args.root_dir,
-                target_dirs=[dest_dir, source_dest_dir],
+                target_dirs=[dest_dir, dest_assets_dir, source_dest_dir],
             )
 
         for _html_name in os.listdir(dest_dir):

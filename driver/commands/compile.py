@@ -137,6 +137,7 @@ def _stage_workspace_for_compile(
 
 def _compile_initial_post_html(
     output_dir: str,
+    html_dest_dir: str,
     base_dir: str,
     driver_source_bytes: bytes,
     asset_hash: str,
@@ -157,13 +158,18 @@ def _compile_initial_post_html(
     inline_script: str = "",
 ) -> str:
     initial_hidden_text = ""
+    pdf_href = (
+        f"assets/post.{asset_hash}.pdf"
+        if os.path.abspath(output_dir) != os.path.abspath(html_dest_dir)
+        else f"post.{asset_hash}.pdf"
+    )
     compile_and_build_html(
         source_bytes=driver_source_bytes,
         output_dir=output_dir,
         asset_hash=asset_hash,
         file_prefix="post",
         template_path=os.path.join(base_dir, "index.template.html"),
-        dest_dir=output_dir,
+        dest_dir=html_dest_dir,
         title_format="Blog Page {i}",
         default_title=post_title,
         description=post_subtitle,
@@ -172,7 +178,8 @@ def _compile_initial_post_html(
         extract_title_from_pdf=True,
         hidden_text_override=initial_hidden_text,
         raw_copy_html=raw_copy_html,
-        svg_href_rewrites={"post.pdf": f"post.{asset_hash}.pdf"},
+        svg_href_rewrites={"post.pdf": pdf_href},
+        asset_dest_dir=output_dir,
         stylesheet_asset_path=stylesheet_asset_path,
         clipboard_asset_path=clipboard_asset_path,
         theme_asset_path=theme_asset_path,
@@ -205,6 +212,8 @@ def run_compile(args: Namespace) -> None:
 
     try:
         output_dir_override = getattr(args, "output_dir_override", None)
+        html_output_dir_override = getattr(args, "html_output_dir_override", None)
+        public_output_dir_override = getattr(args, "public_output_dir_override", None)
         if output_dir_override is None:
             os.makedirs(build_base, exist_ok=True)
             output_dir = safe_join_child(build_base, workspace_name)
@@ -212,6 +221,18 @@ def run_compile(args: Namespace) -> None:
             output_dir = os.path.abspath(str(output_dir_override))
             os.makedirs(os.path.dirname(output_dir), exist_ok=True)
         reset_directory(output_dir)
+        html_output_dir = (
+            os.path.abspath(str(html_output_dir_override))
+            if html_output_dir_override is not None
+            else output_dir
+        )
+        public_output_dir = (
+            os.path.abspath(str(public_output_dir_override))
+            if public_output_dir_override is not None
+            else html_output_dir
+        )
+        os.makedirs(html_output_dir, exist_ok=True)
+        os.makedirs(public_output_dir, exist_ok=True)
 
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         asset_context = build_driver_asset_context(base_dir, args.root_dir)
@@ -266,6 +287,7 @@ def run_compile(args: Namespace) -> None:
         raw_copy_html = build_raw_copy_assets(
             source_raws,
             asset_dir=output_dir,
+            html_dir=html_output_dir,
         )
 
         print("Compiling Typst project...", file=sys.stderr)
@@ -279,11 +301,12 @@ def run_compile(args: Namespace) -> None:
         og_url = build_public_page_url(
             base_url=base_url,
             root_dir=args.root_dir,
-            dest_dir=output_dir,
+            dest_dir=html_output_dir,
             html_filename="index.html",
         )
         initial_hidden_text = _compile_initial_post_html(
             output_dir=output_dir,
+            html_dest_dir=html_output_dir,
             base_dir=base_dir,
             driver_source_bytes=driver_source_bytes,
             asset_hash=asset_hash,
@@ -317,14 +340,14 @@ def run_compile(args: Namespace) -> None:
             last_revision_url,
         )
 
-        index_path = os.path.join(output_dir, "index.html")
+        index_path = os.path.join(html_output_dir, "index.html")
         replace_hidden_block(
             index_path=index_path,
             old_hidden_text=initial_hidden_text,
             new_hidden_text=final_hidden_text_override,
         )
 
-        copied_files = _copy_workspace_public_files(workspace_path, output_dir)
+        copied_files = _copy_workspace_public_files(workspace_path, public_output_dir)
         if copied_files:
             print(
                 f"Copied {copied_files} file(s) from '{WORKSPACE_PUBLIC_DIR_NAME}/'.",

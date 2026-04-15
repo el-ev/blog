@@ -251,6 +251,7 @@ def update_content(args: Namespace) -> None:
 
     root_dir: str = args.root_dir
     os.makedirs(root_dir, exist_ok=True)
+    content_asset_dir = os.path.join(root_dir, "assets")
     asset_context = build_driver_asset_context(base_dir, root_dir)
     base_url = resolve_base_url(args)
     og_url = build_public_page_url(
@@ -267,6 +268,7 @@ def update_content(args: Namespace) -> None:
         file_prefix="content",
         template_path=template_path,
         dest_dir=root_dir,
+        asset_dest_dir=content_asset_dir,
         title_format="Blog Content Page {i}",
         default_title=parsed_title,
         description=parsed_subtitle,
@@ -286,7 +288,7 @@ def update_content(args: Namespace) -> None:
         inline_script=asset_context.web_assets.inline_script,
     )
 
-    glyph_target_dirs: List[str] = [root_dir]
+    glyph_target_dirs: List[str] = [root_dir, content_asset_dir]
     for date_str in sorted(os.listdir(dest_base_dir), reverse=True):
         date_dir = os.path.join(dest_base_dir, date_str)
         if not os.path.isdir(date_dir):
@@ -296,6 +298,9 @@ def update_content(args: Namespace) -> None:
             if not os.path.isdir(post_path):
                 continue
             glyph_target_dirs.append(post_path)
+            post_assets_dir = os.path.join(post_path, "assets")
+            if os.path.isdir(post_assets_dir):
+                glyph_target_dirs.append(post_assets_dir)
             source_dir = os.path.join(post_path, "source")
             if os.path.isdir(source_dir):
                 glyph_target_dirs.append(source_dir)
