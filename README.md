@@ -7,9 +7,10 @@ Typst-based blog pipeline and one deployment example.
 - `typst` on `PATH`
 - `svgo` on `PATH` (SVG optimization)
 - `terser` on `PATH` (JavaScript minification)
+- `lightningcss` on `PATH` (CSS minification)
 
 ```bash
-npm install --global svgo terser
+npm install --global svgo terser lightningcss-cli
 ```
 
 ## Quick start

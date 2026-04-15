@@ -20,6 +20,9 @@ _typst_version: Optional[str] = None
 _svgo_path: Optional[str] = None
 _svgo_path_checked = False
 _svgo_missing_warned = False
+_lightningcss_command: Optional[List[str]] = None
+_lightningcss_command_checked = False
+_lightningcss_missing_warned = False
 _terser_missing_warned = False
 _WORKSPACE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _TYPST_DECLARED_STRING_PATTERN_TEMPLATE = r'#let\s+{name}\s*=\s*"([^"]*)"'
@@ -232,6 +235,23 @@ def _resolve_svgo_path() -> Optional[str]:
     return _svgo_path
 
 
+def _resolve_lightningcss_command() -> Optional[List[str]]:
+    global _lightningcss_command, _lightningcss_command_checked
+    if _lightningcss_command_checked:
+        return _lightningcss_command
+
+    lightningcss_path = shutil.which("lightningcss") or shutil.which("lightningcss.cmd")
+    if lightningcss_path:
+        _lightningcss_command = [lightningcss_path]
+    else:
+        npx_path = shutil.which("npx") or shutil.which("npx.cmd")
+        if npx_path:
+            _lightningcss_command = [npx_path, "--yes", "lightningcss-cli"]
+
+    _lightningcss_command_checked = True
+    return _lightningcss_command
+
+
 def _run_svgo(svg_path: str, preserve_ids: bool = False) -> None:
     global _svgo_missing_warned
 
@@ -438,11 +458,50 @@ def _minify_js_source(source: str) -> str:
 
 
 def _minify_css_source(source: str) -> str:
-    css = re.sub(r"/\*.*?\*/", "", source, flags=re.DOTALL)
-    css = re.sub(r"\s+", " ", css)
-    css = re.sub(r"\s*([{}:;,>+~])\s*", r"\1", css)
-    css = re.sub(r";}", "}", css)
-    return css.strip()
+    global _lightningcss_missing_warned
+
+    lightningcss_command = _resolve_lightningcss_command()
+    if not lightningcss_command:
+        if not _lightningcss_missing_warned:
+            print(
+                "Lightning CSS not found, skipping CSS minification. "
+                "Install it with `npm install --global lightningcss-cli`.",
+                file=sys.stderr,
+            )
+            _lightningcss_missing_warned = True
+        return source
+
+    try:
+        result = subprocess.run(
+            [*lightningcss_command, "--minify"],
+            check=True,
+            input=source,
+            text=True,
+            capture_output=True,
+        )
+    except subprocess.CalledProcessError as e:
+        stderr = e.stderr.strip() if e.stderr else ""
+        if stderr:
+            print(
+                f"Lightning CSS minification failed, using original CSS: {stderr}",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                "Lightning CSS minification failed, using original CSS.",
+                file=sys.stderr,
+            )
+        return source
+
+    minified = result.stdout.strip()
+    if not minified:
+        print(
+            "Lightning CSS minification produced empty output, using original CSS.",
+            file=sys.stderr,
+        )
+        return source
+
+    return minified
 
 
 _HTML_MINIFY_PRESERVE_PATTERN = re.compile(
@@ -520,7 +579,7 @@ def build_driver_web_assets(driver_dir: str, webroot_dir: str) -> DriverWebAsset
         asset_dir=assets_dir,
         prefix="site",
         suffix=".css",
-        content=stylesheet_source,
+        content=_minify_css_source(stylesheet_source),
     )
     clipboard_asset_path = _write_hashed_asset(
         asset_dir=assets_dir,
