@@ -34,7 +34,7 @@ from .submission_workspace import (
     stage_workspace_if_needed,
     write_workspace_manifest,
 )
-from .utils import rewrite_script_src, rewrite_stylesheet_href, safe_join_child
+from .utils import minify_html_file, rewrite_script_src, rewrite_stylesheet_href, safe_join_child
 
 
 def _submit_to_destination(
@@ -154,6 +154,10 @@ def _submit_to_destination(
                 root_dir=args.root_dir,
                 target_dirs=[dest_dir, source_dest_dir],
             )
+
+        for _html_name in os.listdir(dest_dir):
+            if _html_name.endswith(".html"):
+                minify_html_file(os.path.join(dest_dir, _html_name))
     finally:
         if temp_root is not None:
             shutil.rmtree(temp_root, ignore_errors=True)

@@ -413,6 +413,40 @@ def _minify_js_source(source: str) -> str:
     return minified
 
 
+_HTML_MINIFY_PRESERVE_PATTERN = re.compile(
+    r"(<(?:script|style|pre)\b[^>]*>.*?</(?:script|style|pre)>)",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def _minify_html(content: str) -> str:
+    segments = _HTML_MINIFY_PRESERVE_PATTERN.split(content)
+    parts: List[str] = []
+    for i, segment in enumerate(segments):
+        if i % 2 == 1:
+            parts.append(segment)
+        else:
+            segment = re.sub(r"<!--.*?-->", "", segment, flags=re.DOTALL)
+            segment = re.sub(r">\s+<", "><", segment)
+            segment = re.sub(r"[ \t]{2,}", " ", segment)
+            segment = re.sub(r"[ \t]+\n", "\n", segment)
+            segment = re.sub(r"\n{2,}", "\n", segment)
+            parts.append(segment.strip())
+    return "".join(parts).strip() + "\n"
+
+
+def minify_html_file(path: str) -> None:
+    if not os.path.isfile(path):
+        return
+    with open(path, "r", encoding="utf-8") as f:
+        content = f.read()
+    minified = _minify_html(content)
+    if minified == content:
+        return
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(minified)
+
+
 def _remove_legacy_root_js_files(webroot_dir: str) -> int:
     if not os.path.isdir(webroot_dir):
         return 0

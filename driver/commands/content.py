@@ -17,6 +17,7 @@ from .utils import (
     extract_declared_typst_string,
     extract_declared_typst_string_from_source,
     hash_text_with_sources,
+    minify_html_file,
 )
 
 
@@ -302,6 +303,7 @@ def update_content(args: Namespace) -> None:
         target_dirs=glyph_target_dirs,
         clean_global_store=True,
     )
+    minify_html_file(os.path.join(root_dir, "index.html"))
 
     sitemap_lines = _build_sitemap_lines(base_url, posts_by_date)
     rss_lines = _build_rss_lines(
