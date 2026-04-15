@@ -338,6 +338,19 @@ def build_relative_href(from_dir: str, target_path: str) -> str:
     return rel_path
 
 
+def build_root_asset_href(asset_path: str) -> str:
+    asset_abs = os.path.abspath(asset_path)
+    assets_dir = os.path.dirname(asset_abs)
+    if os.path.basename(assets_dir) != WEB_ASSETS_DIR_NAME:
+        raise ValueError(
+            f"Expected asset path inside '{WEB_ASSETS_DIR_NAME}/': {asset_path}"
+        )
+    rel_path = os.path.relpath(asset_abs, start=assets_dir).replace("\\", "/")
+    if not rel_path or rel_path == ".":
+        raise ValueError(f"Invalid asset path: {asset_path}")
+    return f"/{WEB_ASSETS_DIR_NAME}/{rel_path}"
+
+
 def _rebase_relative_href_for_destination(
     href: str,
     source_dir: str,
@@ -1313,10 +1326,7 @@ def rewrite_glyph_preload_href(html_path: str, glyph_asset_path: str) -> bool:
     with open(html_path, "r", encoding="utf-8") as f:
         html_content = f.read()
 
-    glyph_src = build_relative_href(
-        os.path.dirname(html_path),
-        glyph_asset_path,
-    )
+    glyph_src = build_root_asset_href(glyph_asset_path)
     glyph_symbol_id = _extract_first_glyph_symbol_id(glyph_asset_path)
     if glyph_symbol_id is None:
         return False
@@ -1808,7 +1818,11 @@ def _extract_and_rewrite_shared_svg_glyphs(
         )
 
     for svg_path, svg_data, defs_block, local_symbol_map in page_symbol_maps:
-        glyph_href = build_relative_href(os.path.dirname(svg_path), glyph_asset_path)
+        glyph_href = (
+            build_root_asset_href(glyph_asset_path)
+            if use_global_registry
+            else build_relative_href(os.path.dirname(svg_path), glyph_asset_path)
+        )
         wrapper_symbols: List[str] = []
         seen_local_ids: Set[str] = set()
 
@@ -2583,22 +2597,13 @@ def build_html_from_svgs(
 
     stylesheet_src = ""
     if stylesheet_asset_path:
-        stylesheet_src = build_relative_href(
-            html_dir,
-            stylesheet_asset_path,
-        )
+        stylesheet_src = build_root_asset_href(stylesheet_asset_path)
     clipboard_src = ""
     if clipboard_asset_path:
-        clipboard_src = build_relative_href(
-            html_dir,
-            clipboard_asset_path,
-        )
+        clipboard_src = build_root_asset_href(clipboard_asset_path)
     theme_src = ""
     if theme_asset_path:
-        theme_src = build_relative_href(
-            html_dir,
-            theme_asset_path,
-        )
+        theme_src = build_root_asset_href(theme_asset_path)
     index_content = index_content.replace(
         "{{STYLESHEET_SRC}}", html.escape(stylesheet_src)
     )
@@ -2624,9 +2629,15 @@ def build_html_from_svgs(
     else:
         warmup_glyph_asset_path = global_glyph_asset_path
     if warmup_glyph_asset_path:
-        glyph_src = build_relative_href(
-            html_dir,
-            warmup_glyph_asset_path,
+        glyph_src = (
+            build_root_asset_href(warmup_glyph_asset_path)
+            if global_glyph_asset_path
+            and os.path.dirname(os.path.abspath(warmup_glyph_asset_path))
+            == os.path.dirname(os.path.abspath(global_glyph_asset_path))
+            else build_relative_href(
+                html_dir,
+                warmup_glyph_asset_path,
+            )
         )
         glyph_symbol_id = _extract_first_glyph_symbol_id(warmup_glyph_asset_path)
         if glyph_symbol_id is not None:
