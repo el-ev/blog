@@ -2,6 +2,7 @@ from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 import os
 import shutil
 import sys
+import tempfile
 from argparse import Namespace
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
@@ -37,6 +38,36 @@ from .submission_workspace import (
 from .utils import minify_html_file, rewrite_script_src, rewrite_stylesheet_href, safe_join_child
 
 
+def _backup_existing_destination(
+    dest_base_dir: str,
+    dest_dir: str,
+    dest_dir_name: str,
+) -> Tuple[Optional[str], Optional[str]]:
+    if not os.path.isdir(dest_dir):
+        return None, None
+
+    backup_root = tempfile.mkdtemp(prefix=".submit-backup-", dir=dest_base_dir)
+    backup_dir = os.path.join(backup_root, dest_dir_name)
+    os.replace(dest_dir, backup_dir)
+    return backup_root, backup_dir
+
+
+def _restore_destination_backup(dest_dir: str, backup_dir: Optional[str]) -> None:
+    if backup_dir is None or not os.path.isdir(backup_dir):
+        return
+
+    if os.path.isdir(dest_dir):
+        shutil.rmtree(dest_dir, ignore_errors=True)
+    os.replace(backup_dir, dest_dir)
+
+
+def _resolve_amend_workspace_path(args: Namespace, workspace_name: str, source_dir: str) -> str:
+    workspace_path = safe_join_child(args.workspace_base, workspace_name)
+    if os.path.isdir(workspace_path):
+        return workspace_path
+    return source_dir
+
+
 def _submit_to_destination(
     args: Namespace,
     workspace_name: str,
@@ -61,8 +92,15 @@ def _submit_to_destination(
     staged_workspace_path, temp_root = stage_workspace_if_needed(
         workspace_path, dest_dir
     )
+    backup_root: Optional[str] = None
+    backup_dir: Optional[str] = None
     try:
         workspace_files = collect_relative_files(staged_workspace_path)
+        backup_root, backup_dir = _backup_existing_destination(
+            dest_base_dir=dest_base_dir,
+            dest_dir=dest_dir,
+            dest_dir_name=dest_dir_name,
+        )
 
         compile_args = Namespace(**vars(args))
         compile_args.name = workspace_name
@@ -117,6 +155,8 @@ def _submit_to_destination(
             stylesheet_asset_path=asset_context.web_assets.stylesheet_path,
             clipboard_asset_path=asset_context.web_assets.clipboard_script_path,
             theme_asset_path=asset_context.web_assets.theme_script_path,
+            inline_style=asset_context.web_assets.inline_style,
+            inline_script=asset_context.web_assets.inline_script,
             dest_dir=dest_dir,
             post_title=post_title,
             meta_fields=meta_fields,
@@ -158,7 +198,12 @@ def _submit_to_destination(
         for _html_name in os.listdir(dest_dir):
             if _html_name.endswith(".html"):
                 minify_html_file(os.path.join(dest_dir, _html_name))
+    except Exception:
+        _restore_destination_backup(dest_dir, backup_dir)
+        raise
     finally:
+        if backup_root is not None:
+            shutil.rmtree(backup_root, ignore_errors=True)
         if temp_root is not None:
             shutil.rmtree(temp_root, ignore_errors=True)
 
@@ -224,10 +269,11 @@ def _amend_latest_workspace(
         date_str=date_str,
         entry_name=dest_dir_name,
     )
+    workspace_path = _resolve_amend_workspace_path(args, workspace_name, source_dir)
     _submit_to_destination(
         args=args,
         workspace_name=workspace_name,
-        workspace_path=source_dir,
+        workspace_path=workspace_path,
         date_str=publish_date,
         dest_dir_name=dest_dir_name,
         target_rev=revision if revision == target_rev else target_rev,
