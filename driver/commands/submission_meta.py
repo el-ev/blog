@@ -29,21 +29,15 @@ def extract_post_headers(
 
 
 def extract_post_pdf_name(post_dir: str) -> Tuple[str, str]:
-    candidate_dirs = []
     asset_dir = os.path.join(post_dir, "assets")
-    if os.path.isdir(asset_dir):
-        candidate_dirs.append(("assets", asset_dir))
-    candidate_dirs.append(("", post_dir))
+    if not os.path.isdir(asset_dir):
+        raise RuntimeError(f"Compiled post assets not found in '{post_dir}'.")
 
-    for dir_prefix, current_dir in candidate_dirs:
-        for filename in sorted(os.listdir(current_dir)):
-            if not re.match(r"^post\.[^.]+\.pdf$", filename):
-                continue
-            relative_name = (
-                f"{dir_prefix}/{filename}" if dir_prefix else filename
-            )
-            return relative_name, filename[len("post.") : -len(".pdf")]
-    raise RuntimeError(f"Compiled post PDF not found in '{post_dir}'.")
+    for filename in sorted(os.listdir(asset_dir)):
+        if not re.match(r"^post\.[^.]+\.pdf$", filename):
+            continue
+        return f"assets/{filename}", filename[len("post.") : -len(".pdf")]
+    raise RuntimeError(f"Compiled post PDF not found in '{asset_dir}'.")
 
 
 def load_meta_fields(post_dir: str) -> Dict[str, str]:
@@ -214,7 +208,6 @@ def compile_meta_page(
     raw_copy_html = build_raw_copy_assets(
         meta_raws,
         asset_dir=asset_dir,
-        html_dir=dest_dir,
     )
 
     os.makedirs(build_base, exist_ok=True)

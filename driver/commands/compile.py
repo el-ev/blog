@@ -159,11 +159,7 @@ def _compile_initial_post_html(
     image_source_dir: Optional[str] = None,
 ) -> str:
     initial_hidden_text = ""
-    pdf_href = (
-        f"assets/post.{asset_hash}.pdf"
-        if os.path.abspath(output_dir) != os.path.abspath(html_dest_dir)
-        else f"post.{asset_hash}.pdf"
-    )
+    pdf_href = f"./assets/post.{asset_hash}.pdf"
     compile_and_build_html(
         source_bytes=driver_source_bytes,
         output_dir=output_dir,
@@ -217,23 +213,29 @@ def run_compile(args: Namespace) -> None:
         html_output_dir_override = getattr(args, "html_output_dir_override", None)
         public_output_dir_override = getattr(args, "public_output_dir_override", None)
         if output_dir_override is None:
-            os.makedirs(build_base, exist_ok=True)
-            output_dir = safe_join_child(build_base, workspace_name)
+            if html_output_dir_override is None:
+                os.makedirs(build_base, exist_ok=True)
+                html_output_dir = safe_join_child(build_base, workspace_name)
+            else:
+                html_output_dir = os.path.abspath(str(html_output_dir_override))
+            output_dir = safe_join_child(html_output_dir, "assets")
+            reset_directory(html_output_dir)
         else:
             output_dir = os.path.abspath(str(output_dir_override))
-            os.makedirs(os.path.dirname(output_dir), exist_ok=True)
-        reset_directory(output_dir)
-        html_output_dir = (
-            os.path.abspath(str(html_output_dir_override))
-            if html_output_dir_override is not None
-            else output_dir
-        )
+            html_output_dir = (
+                os.path.abspath(str(html_output_dir_override))
+                if html_output_dir_override is not None
+                else os.path.dirname(output_dir)
+            )
+            reset_directory(output_dir)
+
         public_output_dir = (
             os.path.abspath(str(public_output_dir_override))
             if public_output_dir_override is not None
             else html_output_dir
         )
         os.makedirs(html_output_dir, exist_ok=True)
+        os.makedirs(output_dir, exist_ok=True)
         os.makedirs(public_output_dir, exist_ok=True)
 
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -289,7 +291,6 @@ def run_compile(args: Namespace) -> None:
         raw_copy_html = build_raw_copy_assets(
             source_raws,
             asset_dir=output_dir,
-            html_dir=html_output_dir,
         )
 
         print("Compiling Typst project...", file=sys.stderr)

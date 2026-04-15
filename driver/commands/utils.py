@@ -338,17 +338,34 @@ def build_relative_href(from_dir: str, target_path: str) -> str:
     return rel_path
 
 
-def build_root_asset_href(asset_path: str) -> str:
-    asset_abs = os.path.abspath(asset_path)
-    assets_dir = os.path.dirname(asset_abs)
-    if os.path.basename(assets_dir) != WEB_ASSETS_DIR_NAME:
+def _build_asset_rel_path(asset_path: str) -> str:
+    asset_parts = os.path.abspath(asset_path).split(os.sep)
+    if WEB_ASSETS_DIR_NAME not in asset_parts:
         raise ValueError(
             f"Expected asset path inside '{WEB_ASSETS_DIR_NAME}/': {asset_path}"
         )
-    rel_path = os.path.relpath(asset_abs, start=assets_dir).replace("\\", "/")
+    asset_index = len(asset_parts) - 1 - asset_parts[::-1].index(WEB_ASSETS_DIR_NAME)
+    rel_path = "/".join(part for part in asset_parts[asset_index + 1 :] if part)
     if not rel_path or rel_path == ".":
         raise ValueError(f"Invalid asset path: {asset_path}")
+    if rel_path.startswith("../"):
+        raise ValueError(f"Invalid asset path: {asset_path}")
+    return rel_path
+
+
+def build_root_asset_href(asset_path: str) -> str:
+    rel_path = _build_asset_rel_path(asset_path)
     return f"/{WEB_ASSETS_DIR_NAME}/{rel_path}"
+
+
+def build_local_asset_href(asset_path: str) -> str:
+    rel_path = _build_asset_rel_path(asset_path)
+    return f"./{WEB_ASSETS_DIR_NAME}/{rel_path}"
+
+
+def build_asset_sibling_href(asset_path: str) -> str:
+    rel_path = _build_asset_rel_path(asset_path)
+    return f"./{rel_path}"
 
 
 def _rebase_relative_href_for_destination(
@@ -1123,7 +1140,6 @@ def extract_typst_tables_from_content(
 def build_raw_copy_assets(
     raw_entries: List[Tuple[str, bool]],
     asset_dir: Optional[str] = None,
-    html_dir: Optional[str] = None,
 ) -> str:
     if not raw_entries:
         return ""
@@ -1146,11 +1162,7 @@ def build_raw_copy_assets(
     with open(asset_path, "w", encoding="utf-8") as f:
         f.write(json_payload)
 
-    asset_href = (
-        build_relative_href(html_dir, asset_path)
-        if html_dir is not None
-        else f"./{asset_name}"
-    )
+    asset_href = build_local_asset_href(asset_path)
 
     return (
         '<script id="copy-data" type="application/json" '
@@ -1821,7 +1833,7 @@ def _extract_and_rewrite_shared_svg_glyphs(
         glyph_href = (
             build_root_asset_href(glyph_asset_path)
             if use_global_registry
-            else build_relative_href(os.path.dirname(svg_path), glyph_asset_path)
+            else build_asset_sibling_href(glyph_asset_path)
         )
         wrapper_symbols: List[str] = []
         seen_local_ids: Set[str] = set()
@@ -2681,7 +2693,7 @@ def build_html_from_svgs(
         _optimize_svg_with_normalized_href(glyph_asset_path, preserve_ids=True)
 
     for svg_path, page_title in page_render_items:
-        page_href = build_relative_href(html_dir, svg_path)
+        page_href = build_local_asset_href(svg_path)
         page_links_list.append(
             f'<object class="page" type="image/svg+xml" data="{html.escape(page_href, quote=True)}" '
             f'title="{page_title}"></object>'
@@ -2759,21 +2771,9 @@ def build_html_from_svgs(
     index_content = index_content.replace("{{RSS_FEED_LINK}}", rss_feed_link)
 
     glyph_preload_html = ""
-    if glyph_asset_path is not None:
-        warmup_glyph_asset_path = glyph_asset_path
-    else:
-        warmup_glyph_asset_path = global_glyph_asset_path
+    warmup_glyph_asset_path = glyph_asset_path or global_glyph_asset_path
     if warmup_glyph_asset_path:
-        glyph_src = (
-            build_root_asset_href(warmup_glyph_asset_path)
-            if global_glyph_asset_path
-            and os.path.dirname(os.path.abspath(warmup_glyph_asset_path))
-            == os.path.dirname(os.path.abspath(global_glyph_asset_path))
-            else build_relative_href(
-                html_dir,
-                warmup_glyph_asset_path,
-            )
-        )
+        glyph_src = build_root_asset_href(warmup_glyph_asset_path)
         glyph_symbol_id = _extract_first_glyph_symbol_id(warmup_glyph_asset_path)
         if glyph_symbol_id is not None:
             glyph_preload_html = _build_glyph_preload_svg(glyph_src, glyph_symbol_id)
