@@ -30,6 +30,7 @@ _ASSET_HASH_LENGTH = 6
 _RAW_COPY_ID_HASH_LENGTH = 10
 WORKSPACE_PUBLIC_DIR_NAME = "public"
 WEB_ASSETS_DIR_NAME = "assets"
+TEMP_WORK_DIR_NAME = ".tmp"
 _SVGO_CONFIG_PATH = os.path.join(
     os.path.dirname(os.path.dirname(__file__)),
     "svgo.config.mjs",
@@ -306,6 +307,16 @@ def reset_directory(path: str) -> None:
     if os.listdir(path):
         shutil.rmtree(path)
         os.makedirs(path, exist_ok=True)
+
+
+def get_temp_root(build_base: str) -> str:
+    temp_root = os.path.join(os.path.abspath(build_base), TEMP_WORK_DIR_NAME)
+    os.makedirs(temp_root, exist_ok=True)
+    return temp_root
+
+
+def make_temp_dir(build_base: str, prefix: str) -> str:
+    return tempfile.mkdtemp(prefix=prefix, dir=get_temp_root(build_base))
 
 
 def validate_workspace_name(name: str) -> str:

@@ -2,7 +2,6 @@ from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 import os
 import shutil
 import sys
-import tempfile
 from argparse import Namespace
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
@@ -35,18 +34,18 @@ from .submission_workspace import (
     stage_workspace_if_needed,
     write_workspace_manifest,
 )
-from .utils import minify_html_file, safe_join_child
+from .utils import make_temp_dir, minify_html_file, safe_join_child
 
 
 def _backup_existing_destination(
-    dest_base_dir: str,
+    build_base: str,
     dest_dir: str,
     dest_dir_name: str,
 ) -> Tuple[Optional[str], Optional[str]]:
     if not os.path.isdir(dest_dir):
         return None, None
 
-    backup_root = tempfile.mkdtemp(prefix=".submit-backup-", dir=dest_base_dir)
+    backup_root = make_temp_dir(build_base, prefix=".submit-backup-")
     backup_dir = os.path.join(backup_root, dest_dir_name)
     os.replace(dest_dir, backup_dir)
     return backup_root, backup_dir
@@ -91,14 +90,14 @@ def _submit_to_destination(
         existing_manifest_data = load_manifest_data(os.path.join(dest_dir, "source"))
 
     staged_workspace_path, temp_root = stage_workspace_if_needed(
-        workspace_path, dest_dir
+        workspace_path, dest_dir, args.build_base
     )
     backup_root: Optional[str] = None
     backup_dir: Optional[str] = None
     try:
         workspace_files = collect_relative_files(staged_workspace_path)
         backup_root, backup_dir = _backup_existing_destination(
-            dest_base_dir=dest_base_dir,
+            build_base=args.build_base,
             dest_dir=dest_dir,
             dest_dir_name=dest_dir_name,
         )

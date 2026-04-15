@@ -1,7 +1,6 @@
 import os
 import shutil
 import sys
-import tempfile
 from argparse import Namespace
 from datetime import datetime
 from typing import Dict, Optional, Tuple
@@ -25,6 +24,7 @@ from .utils import (
     extract_typst_raws_from_content,
     extract_typst_tables_from_content,
     find_latest_revision,
+    make_temp_dir,
     reset_directory,
     safe_join_child,
     sources_hash,
@@ -119,7 +119,7 @@ def _prepare_compile_sources(
 
 
 def _stage_workspace_for_compile(
-    workspace_path: str, repo_root: str
+    workspace_path: str, repo_root: str, build_base: str
 ) -> Tuple[str, str]:
     workspace_abs = os.path.abspath(workspace_path)
     repo_abs = os.path.abspath(repo_root)
@@ -129,7 +129,7 @@ def _stage_workspace_for_compile(
     except ValueError:
         pass
 
-    temp_root = tempfile.mkdtemp(prefix=".compile-workspace-", dir=repo_abs)
+    temp_root = make_temp_dir(build_base, prefix=".compile-workspace-")
     staged_path = os.path.join(temp_root, os.path.basename(workspace_abs))
     shutil.copytree(workspace_abs, staged_path)
     return staged_path, temp_root
@@ -206,6 +206,7 @@ def run_compile(args: Namespace) -> None:
     workspace_path, temp_workspace_root = _stage_workspace_for_compile(
         workspace_path,
         repo_root=os.getcwd(),
+        build_base=build_base,
     )
 
     try:

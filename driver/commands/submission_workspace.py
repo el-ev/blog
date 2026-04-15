@@ -1,12 +1,11 @@
 import json
 import os
 import shutil
-import tempfile
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .revisions import parse_workspace_revision_entry
-from .utils import safe_join_child, validate_workspace_name
+from .utils import make_temp_dir, safe_join_child, validate_workspace_name
 
 _GENERATED_SOURCE_BUNDLE_FILES = {
     ".workspace-manifest.json",
@@ -144,11 +143,11 @@ def write_workspace_manifest(
 
 
 def stage_workspace_if_needed(
-    workspace_path: str, dest_dir: str
+    workspace_path: str, dest_dir: str, build_base: str
 ) -> Tuple[str, Optional[str]]:
     tracked_files = manifest_source_files(workspace_path)
     if tracked_files:
-        temp_root = tempfile.mkdtemp(prefix=".amend-workspace-", dir=os.getcwd())
+        temp_root = make_temp_dir(build_base, prefix=".amend-workspace-")
         staged_path = os.path.join(
             temp_root, os.path.basename(os.path.abspath(workspace_path))
         )
@@ -177,7 +176,7 @@ def stage_workspace_if_needed(
     except ValueError:
         return workspace_path, None
 
-    temp_root = tempfile.mkdtemp(prefix=".amend-workspace-", dir=os.getcwd())
+    temp_root = make_temp_dir(build_base, prefix=".amend-workspace-")
     staged_path = os.path.join(temp_root, os.path.basename(workspace_abs))
     shutil.copytree(workspace_abs, staged_path)
     return staged_path, temp_root

@@ -2,7 +2,6 @@ import html
 import os
 import re
 import shutil
-import tempfile
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
@@ -12,6 +11,7 @@ from .utils import (
     extract_declared_typst_string,
     extract_typst_raws_from_content,
     hash_text_with_sources,
+    make_temp_dir,
 )
 
 _META_CODE_FIELD_PATTERN = re.compile(
@@ -210,8 +210,7 @@ def compile_meta_page(
         asset_dir=asset_dir,
     )
 
-    os.makedirs(build_base, exist_ok=True)
-    meta_output_dir = tempfile.mkdtemp(prefix=".meta-build-", dir=build_base)
+    meta_output_dir = make_temp_dir(build_base, prefix=".meta-build-")
     try:
         compile_and_build_html(
             source_bytes=meta_source.encode("utf-8"),
