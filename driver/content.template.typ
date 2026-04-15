@@ -1,4 +1,4 @@
-#import "driver/template.typ": driver_page, action, nav_link, right_top_bar
+#import "driver/template.typ": action, driver_page, nav_link, right_top_bar
 #let title = "Blog"
 #let subtitle = "It is unlikely that there will be many posts here."
 
