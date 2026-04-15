@@ -79,7 +79,7 @@ def load_config_data(config_path: str, warn_to_stderr: bool = False) -> Dict[str
     return loaded
 
 
-def resolve_base_url(args: Any, default: str = "https://owo.li/blog/") -> str:
+def resolve_base_url(args: Any) -> str:
     config_path = getattr(args, "config", "")
     config_data = load_config_data(config_path)
     base_url_arg = getattr(args, "base_url", None)
@@ -88,7 +88,9 @@ def resolve_base_url(args: Any, default: str = "https://owo.li/blog/") -> str:
     elif "base_url" in config_data:
         base_url_raw = config_data["base_url"]
     else:
-        base_url_raw = default
+        raise RuntimeError(
+            "Missing base_url. Provide --base-url or set base_url in config JSON."
+        )
     return str(base_url_raw).rstrip("/")
 
 

@@ -8,7 +8,6 @@ from typing import Dict, List, Optional, Tuple
 from .utils import (
     build_raw_copy_assets,
     compile_and_build_html,
-    extract_declared_typst_string,
     extract_typst_raws_from_content,
     hash_text_with_sources,
     make_temp_dir,
