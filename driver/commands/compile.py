@@ -157,6 +157,8 @@ def _compile_initial_post_html(
     enable_shared_glyph_extraction: bool,
     global_glyph_asset_path: Optional[str] = None,
     global_glyph_map_path: Optional[str] = None,
+    inline_style: str = "",
+    inline_script: str = "",
 ) -> str:
     initial_hidden_text = build_hidden_text(
         "",
@@ -192,6 +194,8 @@ def _compile_initial_post_html(
         enable_shared_glyph_extraction=enable_shared_glyph_extraction,
         global_glyph_asset_path=global_glyph_asset_path,
         global_glyph_map_path=global_glyph_map_path,
+        inline_style=inline_style,
+        inline_script=inline_script,
     )
     return initial_hidden_text
 
@@ -311,6 +315,8 @@ def run_compile(args: Namespace) -> None:
             enable_shared_glyph_extraction=enable_shared_glyph_extraction,
             global_glyph_asset_path=asset_context.global_glyph_asset_path,
             global_glyph_map_path=asset_context.global_glyph_map_path,
+            inline_style=asset_context.web_assets.inline_style,
+            inline_script=asset_context.web_assets.inline_script,
         )
 
         post_pdf_path = os.path.join(output_dir, f"post.{asset_hash}.pdf")

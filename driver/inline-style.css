@@ -1,0 +1,16 @@
+:root {
+    --initial-page-bg: #ffffff;
+    background-color: #f5f5f5;
+    color: #141414;
+}
+
+:root[data-theme="dark"] {
+    --initial-page-bg: #161b22;
+    background-color: #0f141b;
+    color: #e8ecf2;
+}
+
+main {
+    position: relative;
+    z-index: 1;
+}

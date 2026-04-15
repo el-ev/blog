@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" prefix="og: https://ogp.me/ns#">
 
 <head>
     <meta charset="UTF-8">
@@ -8,48 +8,8 @@
     {{OGP_METADATA}}
     <title>{{TITLE}}</title>
     {{GLYPH_PRELOAD}}
-    <style>
-        :root {
-            --initial-page-bg: #ffffff;
-            background-color: #f5f5f5;
-            color: #141414;
-        }
-
-        :root[data-theme="dark"] {
-            --initial-page-bg: #161b22;
-            background-color: #0f141b;
-            color: #e8ecf2;
-        }
-
-        main {
-            position: relative;
-            z-index: 1;
-        }
-    </style>
-    <script>
-        (() => {
-            const storageKey = "blog-color-theme";
-            let theme = "light";
-
-            try {
-                const savedTheme = window.localStorage?.getItem(storageKey);
-                if (savedTheme === "light" || savedTheme === "dark") {
-                    theme = savedTheme;
-                } else if (window.matchMedia?.("(prefers-color-scheme: dark)")?.matches) {
-                    theme = "dark";
-                }
-            } catch {
-                // noop
-            }
-
-            const root = document.documentElement;
-            const isDark = theme === "dark";
-            root.setAttribute("data-theme", theme);
-            root.classList.toggle("theme-light", !isDark);
-            root.classList.toggle("theme-dark", isDark);
-            root.style.colorScheme = isDark ? "dark" : "light";
-        })();
-    </script>
+    {{INLINE_STYLE}}
+    {{INLINE_SCRIPT}}
     <link rel="stylesheet" href="{{STYLESHEET_SRC}}">
     {{RSS_FEED_LINK}}
 </head>
@@ -63,9 +23,6 @@
 <script defer src="{{THEME_SRC}}"></script>
 <script defer src="{{CLIPBOARD_SRC}}"></script>
 <!-- FCP/LCP trigger for Lighthouse -->
-<div aria-hidden="true" style="position: absolute; z-index: -1; top: 100px; opacity: 0.01;">
-You caught me!
-</div>
+<div aria-hidden="true" style="position: absolute; z-index: -1; top: 100px; opacity: 0.01;">You caught me!</div>
 </body>
-
 </html>

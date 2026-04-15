@@ -164,6 +164,8 @@ def compile_meta_page(
     global_glyph_map_path: str,
     rss_feed_path: Optional[str] = None,
     og_url: Optional[str] = None,
+    inline_style: str = "",
+    inline_script: str = "",
 ) -> None:
     meta_template_path = os.path.join(base_dir, "meta.template.typ")
     with open(meta_template_path, "r", encoding="utf-8") as f:
@@ -231,6 +233,8 @@ def compile_meta_page(
             enable_shared_glyph_extraction=False,
             global_glyph_asset_path=global_glyph_asset_path,
             global_glyph_map_path=global_glyph_map_path,
+            inline_style=inline_style,
+            inline_script=inline_script,
         )
     finally:
         shutil.rmtree(meta_output_dir, ignore_errors=True)

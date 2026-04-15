@@ -100,6 +100,26 @@ a:focus-visible > path {
     stroke: CanvasText !important;
   }
 }
+@media (prefers-color-scheme: dark) {
+  :root {
+    --svg-paper-bg: #161b22;
+    --svg-text: #e8ecf2;
+    --svg-muted-text: #a7b0bf;
+    --svg-footer-text: #7f8897;
+    --svg-code-bg: #222a34;
+    --svg-surface-bg: #1b232d;
+    --svg-code-comment: #8e97a6;
+    --svg-code-green: #86df80;
+    --svg-code-dark-green: #74cad3;
+    --svg-code-red: #ff8d99;
+    --svg-code-blue: #8ca8ff;
+    --svg-code-violet: #c792ea;
+    --svg-code-magenta: #e58bff;
+    --svg-muted-stroke: #a7b0bf;
+    --svg-code-gutter: #6f7783;
+    --svg-focus-ring: #8ca8ff;
+  }
+}
 </style>
 """.strip()
 
@@ -109,6 +129,8 @@ class DriverWebAssets:
     stylesheet_path: str
     clipboard_script_path: str
     theme_script_path: str
+    inline_style: str
+    inline_script: str
 
 
 def _append_svg_class(attrs: str, class_name: str) -> str:
@@ -415,6 +437,14 @@ def _minify_js_source(source: str) -> str:
     return minified
 
 
+def _minify_css_source(source: str) -> str:
+    css = re.sub(r"/\*.*?\*/", "", source, flags=re.DOTALL)
+    css = re.sub(r"\s+", " ", css)
+    css = re.sub(r"\s*([{}:;,>+~])\s*", r"\1", css)
+    css = re.sub(r";}", "}", css)
+    return css.strip()
+
+
 _HTML_MINIFY_PRESERVE_PATTERN = re.compile(
     r"(<(?:script|style|pre)\b[^>]*>.*?</(?:script|style|pre)>)",
     re.DOTALL | re.IGNORECASE,
@@ -505,10 +535,20 @@ def build_driver_web_assets(driver_dir: str, webroot_dir: str) -> DriverWebAsset
         content=_minify_js_source(theme_source),
     )
 
+    inline_style_src_path = os.path.join(driver_dir, "inline-style.css")
+    inline_script_src_path = os.path.join(driver_dir, "inline-script.js")
+
+    with open(inline_style_src_path, "r", encoding="utf-8") as f:
+        inline_style_source = f.read()
+    with open(inline_script_src_path, "r", encoding="utf-8") as f:
+        inline_script_source = f.read()
+
     web_assets = DriverWebAssets(
         stylesheet_path=stylesheet_asset_path,
         clipboard_script_path=clipboard_asset_path,
         theme_script_path=theme_asset_path,
+        inline_style=_minify_css_source(inline_style_source),
+        inline_script=_minify_js_source(inline_script_source),
     )
 
     _remove_legacy_root_js_files(webroot_dir)
@@ -2336,6 +2376,8 @@ def build_html_from_svgs(
     enable_shared_glyph_extraction: bool = True,
     global_glyph_asset_path: Optional[str] = None,
     global_glyph_map_path: Optional[str] = None,
+    inline_style: str = "",
+    inline_script: str = "",
 ) -> str:
     with open(template_path, "r", encoding="utf-8") as f:
         template = f.read()
@@ -2400,6 +2442,14 @@ def build_html_from_svgs(
 
     page_links = "\n".join(page_links_list)
     index_content = template.replace("{{PAGES}}", page_links)
+    index_content = index_content.replace(
+        "{{INLINE_STYLE}}",
+        f"<style>{inline_style}</style>" if inline_style else "",
+    )
+    index_content = index_content.replace(
+        "{{INLINE_SCRIPT}}",
+        f"<script>{inline_script}</script>" if inline_script else "",
+    )
 
     title = default_title
     hidden_text = ""
@@ -2535,6 +2585,8 @@ def compile_and_build_html(
     enable_shared_glyph_extraction: bool = True,
     global_glyph_asset_path: Optional[str] = None,
     global_glyph_map_path: Optional[str] = None,
+    inline_style: str = "",
+    inline_script: str = "",
 ) -> str:
     svg_prefix = f"{svg_name_prefix}{{0p}}.{asset_hash}.svg"
     pdf_name = f"{file_prefix}.{asset_hash}.pdf"
@@ -2585,4 +2637,6 @@ def compile_and_build_html(
         enable_shared_glyph_extraction=enable_shared_glyph_extraction,
         global_glyph_asset_path=global_glyph_asset_path,
         global_glyph_map_path=global_glyph_map_path,
+        inline_style=inline_style,
+        inline_script=inline_script,
     )

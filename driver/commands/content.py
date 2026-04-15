@@ -282,6 +282,8 @@ def update_content(args: Namespace) -> None:
         og_url=og_url,
         global_glyph_asset_path=asset_context.global_glyph_asset_path,
         global_glyph_map_path=asset_context.global_glyph_map_path,
+        inline_style=asset_context.web_assets.inline_style,
+        inline_script=asset_context.web_assets.inline_script,
     )
 
     glyph_target_dirs: List[str] = [root_dir]
