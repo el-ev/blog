@@ -15,7 +15,7 @@ html {
     --svg-paper-bg: #ffffff;
     --svg-text: #141414;
     --svg-muted-text: #646464;
-    --svg-footer-text: #aaaaaa;
+    --svg-footer-text: #767676;
     --svg-code-bg: #f5f5f5;
     --svg-surface-bg: #f8f8f8;
     --svg-code-comment: #74747c;
@@ -169,4 +169,7 @@ main>div:first-child code {
     pointer-events: none;
     transition: opacity 120ms ease;
     z-index: 9999;
+}
+@media (prefers-reduced-motion: reduce) {
+    #copy-toast { transition: none; }
 }

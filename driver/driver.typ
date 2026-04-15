@@ -22,7 +22,8 @@
         #show image: img => img
         #it
       ])
-      link("driver-image://" + it.source,
+      let alt_part = if it.alt != none { "?alt=" + it.alt } else { "" }
+      link("driver-image://" + it.source + alt_part,
            rect(width: dims.width, height: dims.height, fill: none, stroke: none))
     })
   } else {

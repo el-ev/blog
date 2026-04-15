@@ -149,7 +149,7 @@
     });
 
     svgDocument.addEventListener('keydown', (event) => {
-      if (event.key !== ' ' && event.key !== 'Spacebar') {
+      if (event.key !== ' ' && event.key !== 'Spacebar' && event.key !== 'Enter') {
         return;
       }
       const eventTarget = event.target;

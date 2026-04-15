@@ -7,7 +7,7 @@ import subprocess
 import sys
 import json
 import tempfile
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, TypeVar, Union
@@ -2454,6 +2454,8 @@ def _replace_driver_image_anchors(
             return match.group(0)
 
         image_rel = unquote(parsed.netloc + parsed.path)
+        alt_values = parse_qs(parsed.query).get("alt", [])
+        alt = alt_values[0] if alt_values else None
 
         w_h = re.search(
             r'<rect\b[^>]*\bwidth=["\']([^"\']+)["\'][^>]*\bheight=["\']([^"\']+)["\']',
@@ -2487,7 +2489,12 @@ def _replace_driver_image_anchors(
             with open(src_path, "rb") as f:
                 _convert_to_webp(f.read(), dst_path)
 
-        return f'<image href="{webp_name}" width="{width}" height="{height}"/>'
+        if alt:
+            return (
+                f'<image href="{webp_name}" width="{width}" height="{height}"'
+                f' role="img" aria-label="{html.escape(alt, quote=True)}"/>'
+            )
+        return f'<image href="{webp_name}" width="{width}" height="{height}" role="presentation"/>'
 
     return re.sub(
         r"<a(?P<attrs>[^>]*)>(?P<body>.*?)</a>",
