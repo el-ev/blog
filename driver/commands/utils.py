@@ -1157,40 +1157,54 @@ def extract_typst_tables_from_content(
     )
 
 
-def extract_typst_images(
+def extract_typst_figures(
     main_typ_path: str,
     query_root: str,
     inputs: Optional[Dict[str, str]] = None,
-) -> List[Tuple[str, str]]:
-    results: List[Tuple[str, str]] = []
+) -> List[Tuple[str, str, str]]:
+    """Returns (caption_text, image_source, image_alt) for each image figure."""
+    results: List[Tuple[str, str, str]] = []
     for item in _query_typst_json_nodes(
         main_typ_path=main_typ_path,
         query_root=query_root,
-        selector="image",
-        query_label="images",
-        parse_label="Typst image query output",
+        selector="figure",
+        query_label="figures",
+        parse_label="Typst figure query output",
         inputs=inputs,
     ):
-        alt = item.get("alt")
-        if not alt or not isinstance(alt, str):
+        if item.get("func") != "figure":
             continue
-        alt = alt.strip()
-        source = item.get("source", "")
-        if alt and source:
-            results.append((source, alt))
+        body = item.get("body")
+        if not isinstance(body, dict) or body.get("func") != "image":
+            continue
+        source = body.get("source", "")
+        if not source:
+            continue
+        alt_raw = body.get("alt")
+        alt = ""
+        if isinstance(alt_raw, str):
+            alt = alt_raw.strip()
+        elif alt_raw is not None:
+            alt = re.sub(r"\s+", " ", _flatten_query_text(alt_raw)).strip()
+        caption_node = item.get("caption")
+        if not caption_node:
+            continue
+        caption = re.sub(r"\s+", " ", _flatten_query_text(caption_node)).strip()
+        if caption:
+            results.append((caption, source, alt))
     return results
 
 
-def extract_typst_images_from_content(
+def extract_typst_figures_from_content(
     source_content: Union[str, bytes],
     query_root: str,
     inputs: Optional[Dict[str, str]] = None,
-) -> List[Tuple[str, str]]:
+) -> List[Tuple[str, str, str]]:
     return _extract_typst_from_content(
         source_content=source_content,
         query_root=query_root,
-        query_prefix=".image-query-",
-        extractor=extract_typst_images,
+        query_prefix=".figure-query-",
+        extractor=extract_typst_figures,
         inputs=inputs,
     )
 

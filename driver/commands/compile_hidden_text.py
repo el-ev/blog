@@ -515,49 +515,145 @@ def _extract_bullet_items(line: str) -> List[str]:
     return []
 
 
+def _embed_links_in_text_fragment(
+    text: str,
+    source_links: List[Tuple[str, str]],
+) -> str:
+    """Embed links into a short text fragment without title-line protection."""
+    for href, label in source_links:
+        if not href:
+            continue
+        clean_label = label.strip()
+        if not clean_label:
+            continue
+        escaped_label = html.escape(clean_label)
+        if escaped_label not in text:
+            continue
+        safe_href = html.escape(href, quote=True)
+        anchor = f'<a href="{safe_href}" tabindex="-1">{escaped_label}</a>'
+        text = text.replace(escaped_label, anchor, 1)
+    return text
+
+
 def _inject_info_block_placeholders(
     inner_hidden: str,
     source_info_blocks: List[str],
     placeholder_html: List[Tuple[str, str]],
+    source_links: Optional[List[Tuple[str, str]]] = None,
 ) -> Tuple[str, Set[str]]:
     info_placeholders: Set[str] = set()
     normalized = inner_hidden.replace("\r\n", "\n").replace("\r", "\n")
 
     for info_text in source_info_blocks:
-        flat = re.sub(r"\s+", " ", info_text).strip()
-        if not flat:
+        tokens = re.sub(r"\s+", " ", info_text).strip().split()
+        if not tokens:
             continue
 
-        lines = normalized.split("\n")
-        for i, line in enumerate(lines):
-            if not _normalize_text_for_match(line):
-                continue
-            if _normalize_text_for_match(line) not in _normalize_text_for_match(flat):
-                continue
+        # Match the info block's tokens across whitespace and embedded
+        # placeholder strings using a whitespace-tolerant regex.
+        pattern = re.compile(
+            r"\s+".join(re.escape(tok) for tok in tokens),
+            re.DOTALL,
+        )
+        match = pattern.search(normalized)
+        if not match:
+            continue
 
-            # TODO: this stops at the first blank line, so multi-paragraph info
-            # blocks only have their first paragraph wrapped. Fix by matching
-            # the full flattened info_text across blank-line-separated groups.
-            j = i
-            while j < len(lines) and lines[j].strip():
-                j += 1
+        # Expand match to encompass full lines.
+        line_start = normalized.rfind("\n", 0, match.start())
+        line_start = 0 if line_start == -1 else line_start + 1
+        line_end_nl = normalized.find("\n", match.end())
+        line_end = len(normalized) if line_end_nl == -1 else line_end_nl
 
-            block_lines = [l for l in lines[i:j] if l.strip()]
-            if not block_lines:
-                continue
+        block_lines = [
+            l for l in normalized[line_start:line_end].split("\n") if l.strip()
+        ]
+        if not block_lines:
+            continue
 
-            inner_content = "".join(f"<p>{l}</p>" for l in block_lines)
-            placeholder = _make_hidden_placeholder(len(placeholder_html))
-            placeholder_html.append((
-                placeholder,
-                f'<blockquote class="info-block">{inner_content}</blockquote>',
-            ))
-            info_placeholders.add(placeholder)
-            lines[i:j] = [placeholder]
-            normalized = "\n".join(lines)
-            break
+        inner_content = "\n".join(block_lines)
+        if source_links:
+            inner_content = _embed_links_in_text_fragment(inner_content, source_links)
+        inner_content = "".join(
+            f"<p>{l}</p>" for l in inner_content.split("\n") if l.strip()
+        )
+
+        placeholder = _make_hidden_placeholder(len(placeholder_html))
+        placeholder_html.append((
+            placeholder,
+            f'<blockquote class="info-block">{inner_content}</blockquote>',
+        ))
+        info_placeholders.add(placeholder)
+        normalized = normalized[:line_start] + placeholder + "\n" + normalized[line_end:]
 
     return normalized, info_placeholders
+
+
+def _inject_figure_placeholders(
+    inner_hidden: str,
+    source_figures: List[Tuple[str, str, str]],
+    placeholder_html: List[Tuple[str, str]],
+    asset_hash: str,
+    source_links: Optional[List[Tuple[str, str]]] = None,
+) -> Tuple[str, Set[str]]:
+    """Replace 'Figure N: caption' lines with <figure><img><figcaption> blocks."""
+    figure_placeholders: Set[str] = set()
+    normalized = inner_hidden.replace("\r\n", "\n").replace("\r", "\n")
+
+    for caption_text, source, alt in source_figures:
+        tokens = re.sub(r"\s+", " ", caption_text).strip().split()
+        if not tokens:
+            continue
+
+        # Match "Figure N: caption tokens" — the "Figure N:" prefix is added
+        # automatically by Typst's figure counter in PDF output.
+        pattern = re.compile(
+            r"Figure\s+\d+:\s+" + r"\s+".join(re.escape(tok) for tok in tokens),
+            re.DOTALL | re.IGNORECASE,
+        )
+        match = pattern.search(normalized)
+        if not match:
+            # Fallback: match caption tokens alone (no "Figure N:" prefix).
+            pattern = re.compile(
+                r"\s+".join(re.escape(tok) for tok in tokens),
+                re.DOTALL,
+            )
+            match = pattern.search(normalized)
+        if not match:
+            continue
+
+        line_start = normalized.rfind("\n", 0, match.start())
+        line_start = 0 if line_start == -1 else line_start + 1
+        line_end_nl = normalized.find("\n", match.end())
+        line_end = len(normalized) if line_end_nl == -1 else line_end_nl
+
+        caption_line = normalized[line_start:line_end].strip()
+        if source_links:
+            caption_line = _embed_links_in_text_fragment(caption_line, source_links)
+
+        src_hash = hashlib.sha1(source.encode()).hexdigest()[:6]
+        webp_name = f"image.{src_hash}.{asset_hash}.webp"
+        img_src = html.escape(f"assets/{webp_name}", quote=True)
+
+        if alt:
+            img_tag = (
+                f'<img src="{img_src}" alt="{html.escape(alt, quote=True)}">'
+            )
+        else:
+            img_tag = f'<img src="{img_src}" role="presentation">'
+
+        figure_html = (
+            f"<figure>{img_tag}"
+            f"<figcaption>{caption_line}</figcaption>"
+            f"</figure>"
+        )
+
+        placeholder = _make_hidden_placeholder(len(placeholder_html))
+        placeholder_html.append((placeholder, figure_html))
+        figure_placeholders.add(placeholder)
+        normalized = normalized[:line_start] + placeholder + "\n" + normalized[line_end:]
+
+    return normalized, figure_placeholders
 
 
 def _paragraphize_hidden_text(
@@ -713,7 +809,7 @@ def build_final_hidden_text(
     last_revision_date: Optional[str],
     last_revision_url: Optional[str],
     source_info_blocks: Optional[List[str]] = None,
-    source_images: Optional[List[Tuple[str, str]]] = None,
+    source_figures: Optional[List[Tuple[str, str, str]]] = None,
     nav_links: Optional[List[Tuple[str, str]]] = None,
 ) -> str:
     _, extracted_hidden = extract_pdf_text(
@@ -739,12 +835,22 @@ def build_final_hidden_text(
             inner_hidden,
             source_info_blocks,
             placeholder_html,
+            source_links=source_links,
         )
     embedded_hidden_text, remaining_links = _embed_links_in_hidden_text(
         inner_hidden,
         source_links,
         placeholder_html,
     )
+    figure_placeholders: Set[str] = set()
+    if source_figures:
+        embedded_hidden_text, figure_placeholders = _inject_figure_placeholders(
+            embedded_hidden_text,
+            source_figures,
+            placeholder_html,
+            asset_hash,
+            source_links=source_links,
+        )
     (
         embedded_hidden_text,
         remaining_inline_raws,
@@ -760,18 +866,9 @@ def build_final_hidden_text(
     paragraphized_hidden_text = _paragraphize_hidden_text(
         embedded_hidden_text,
         placeholder_html,
-        block_placeholders | heading_placeholders | table_placeholders | info_placeholders,
+        block_placeholders | heading_placeholders | table_placeholders | info_placeholders | figure_placeholders,
         post_subtitle,
     )
-    if source_images:
-        for source, alt in source_images:
-            src_hash = hashlib.sha1(source.encode()).hexdigest()[:6]
-            webp_name = f"image.{src_hash}.{asset_hash}.webp"
-            img_src = html.escape(f"assets/{webp_name}", quote=True)
-            paragraphized_hidden_text += (
-                f'\n<figure><img src="{img_src}"'
-                f' alt="{html.escape(alt, quote=True)}"></figure>'
-            )
     if nav_links:
         nav_items = "".join(
             f'<a href="{html.escape(href, quote=True)}" tabindex="-1">'

@@ -23,7 +23,7 @@ from .utils import (
     extract_declared_typst_string,
     extract_required_declared_typst_string,
     extract_typst_headings_from_content,
-    extract_typst_images_from_content,
+    extract_typst_figures_from_content,
     extract_typst_info_blocks_from_content,
     extract_typst_links,
     extract_typst_raws_from_content,
@@ -417,7 +417,7 @@ def run_compile(args: Namespace) -> None:
             query_root=os.getcwd(),
             inputs=input_values_svg,
         )
-        source_images = extract_typst_images_from_content(
+        source_figures = extract_typst_figures_from_content(
             driver_source_bytes,
             query_root=os.getcwd(),
             inputs=input_values_pdf,
@@ -482,7 +482,7 @@ def run_compile(args: Namespace) -> None:
             asset_hash,
             last_revision_date,
             last_revision_url,
-            source_images=source_images,
+            source_figures=source_figures,
             source_info_blocks=source_info_blocks,
             nav_links=[
                 ("../../../index.html", "Contents"),
