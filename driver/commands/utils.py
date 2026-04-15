@@ -2162,7 +2162,81 @@ def _infer_index_href_label(href: str) -> Optional[str]:
     return "Contents"
 
 
-def _infer_svg_anchor_label(href: Optional[str]) -> Optional[str]:
+_HTML_TITLE_TAG_PATTERN = re.compile(
+    r"<title\b[^>]*>(?P<title>.*?)</title>",
+    flags=re.IGNORECASE | re.DOTALL,
+)
+_HTML_H1_TAG_PATTERN = re.compile(
+    r"<h1\b[^>]*>(?P<title>.*?)</h1>",
+    flags=re.IGNORECASE | re.DOTALL,
+)
+_HTML_TITLE_CACHE: Dict[str, Optional[str]] = {}
+
+
+def _read_html_title(html_path: str) -> Optional[str]:
+    cached = _HTML_TITLE_CACHE.get(html_path)
+    if cached is not None or html_path in _HTML_TITLE_CACHE:
+        return cached
+
+    if not os.path.isfile(html_path):
+        _HTML_TITLE_CACHE[html_path] = None
+        return None
+
+    with open(html_path, "r", encoding="utf-8") as html_file:
+        html_data = html_file.read()
+
+    h1_match = _HTML_H1_TAG_PATTERN.search(html_data)
+    if h1_match is not None:
+        title = html.unescape(" ".join(h1_match.group("title").split())).strip()
+        _HTML_TITLE_CACHE[html_path] = title or None
+        return _HTML_TITLE_CACHE[html_path]
+
+    title_match = _HTML_TITLE_TAG_PATTERN.search(html_data)
+    if title_match is None:
+        _HTML_TITLE_CACHE[html_path] = None
+        return None
+
+    title = html.unescape(" ".join(title_match.group("title").split())).strip()
+    _HTML_TITLE_CACHE[html_path] = title or None
+    return _HTML_TITLE_CACHE[html_path]
+
+
+def _resolve_post_index_title_from_href(
+    href: str,
+    svg_path: Optional[str],
+) -> Optional[str]:
+    if svg_path is None:
+        return None
+
+    parsed = urlparse(href)
+    if parsed.scheme or parsed.netloc:
+        return None
+
+    raw_path = parsed.path or href
+    if not raw_path:
+        return None
+
+    try:
+        decoded_path = unquote(raw_path)
+    except Exception:
+        decoded_path = raw_path
+
+    if not decoded_path.lower().endswith("index.html"):
+        return None
+
+    svg_dir = os.path.dirname(os.path.abspath(svg_path))
+    target_path = os.path.normpath(os.path.join(svg_dir, decoded_path))
+    normalized_target = target_path.replace(os.sep, "/")
+    if "/posts/" not in normalized_target:
+        return None
+
+    return _read_html_title(target_path)
+
+
+def _infer_svg_anchor_label(
+    href: Optional[str],
+    svg_path: Optional[str] = None,
+) -> Optional[str]:
     if href is None:
         return None
 
@@ -2187,11 +2261,17 @@ def _infer_svg_anchor_label(href: Optional[str]) -> Optional[str]:
             return f"External: {parsed.netloc}"
         return "External"
 
+    post_title = _resolve_post_index_title_from_href(stripped_href, svg_path)
+    if post_title is not None:
+        return post_title
+
     index_label = _infer_index_href_label(stripped_href)
     if index_label is not None:
         return index_label
 
     href_lower = stripped_href.lower()
+    if href_lower.endswith("rss.xml"):
+        return "RSS"
     if href_lower.endswith("meta.html"):
         return "Meta"
     if href_lower.endswith(".pdf"):
@@ -2202,12 +2282,15 @@ def _infer_svg_anchor_label(href: Optional[str]) -> Optional[str]:
     return "Link"
 
 
-def _inject_svg_anchor_accessibility(svg_data: str) -> str:
+def _inject_svg_anchor_accessibility(
+    svg_data: str,
+    svg_path: Optional[str] = None,
+) -> str:
     def _rewrite_anchor(match: re.Match) -> str:
         attrs = match.group("attrs")
         body = match.group("body")
         href = _extract_anchor_href(attrs)
-        label = _infer_svg_anchor_label(href)
+        label = _infer_svg_anchor_label(href, svg_path=svg_path)
         if label is None:
             return match.group(0)
 
@@ -2269,7 +2352,10 @@ def _normalize_svg_href_file(svg_path: str) -> None:
 
     normalized_svg_data = _normalize_svg_href_attributes(svg_data)
     normalized_svg_data = _strip_typst_classes(normalized_svg_data)
-    normalized_svg_data = _inject_svg_anchor_accessibility(normalized_svg_data)
+    normalized_svg_data = _inject_svg_anchor_accessibility(
+        normalized_svg_data,
+        svg_path=svg_path,
+    )
     if normalized_svg_data == svg_data:
         return
 
@@ -2474,7 +2560,7 @@ def patch_svg_file(
         return f'<a target="_top"{attrs}>'
 
     svg_data = re.sub(r"<a([^>]*)>", _rewrite_anchor_tag, svg_data)
-    svg_data = _inject_svg_anchor_accessibility(svg_data)
+    svg_data = _inject_svg_anchor_accessibility(svg_data, svg_path=dst_path)
     svg_data = _inject_svg_theme_classes(svg_data)
     svg_data = _inject_svg_theme_style(svg_data)
 
