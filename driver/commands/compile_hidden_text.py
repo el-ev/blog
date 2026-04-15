@@ -20,17 +20,50 @@ def _index_in_hidden_placeholder(text: str, idx: int) -> bool:
     return start <= idx < end + 2
 
 
+def _match_overlaps_protected_range(
+    start: int,
+    end: int,
+    protected_ranges: List[Tuple[int, int]],
+) -> bool:
+    for protected_start, protected_end in protected_ranges:
+        if start < protected_end and end > protected_start:
+            return True
+    return False
+
+
+def _find_first_nonempty_line_range(text: str) -> Optional[Tuple[int, int]]:
+    cursor = 0
+    for line in text.splitlines(keepends=True):
+        line_start = cursor
+        line_end = cursor + len(line)
+        if line.strip():
+            trimmed_end = line_end
+            while trimmed_end > line_start and text[trimmed_end - 1] in "\r\n":
+                trimmed_end -= 1
+            return line_start, trimmed_end
+        cursor = line_end
+
+    if text.strip():
+        stripped = text.strip()
+        start = text.find(stripped)
+        if start >= 0:
+            return start, start + len(stripped)
+    return None
+
+
 def _replace_first_with_options(
     text: str,
     old: str,
     new: str,
     independent_only: bool = False,
     search_start: int = 0,
+    protected_ranges: Optional[List[Tuple[int, int]]] = None,
 ) -> Tuple[str, bool, int]:
     if not old:
         return text, False, -1
 
     next_search_start = max(search_start, 0)
+    safe_protected_ranges = protected_ranges or []
     while True:
         idx = text.find(old, next_search_start)
         if idx < 0:
@@ -38,6 +71,10 @@ def _replace_first_with_options(
         if not _index_in_hidden_placeholder(text, idx) and (
             not independent_only
             or _is_independent_text_match(text, idx, idx + len(old))
+        ) and not _match_overlaps_protected_range(
+            idx,
+            idx + len(old),
+            safe_protected_ranges,
         ):
             return text[:idx] + new + text[idx + len(old) :], True, idx
         next_search_start = idx + 1
@@ -88,6 +125,10 @@ def _embed_links_in_hidden_text(
     text = inner_hidden
     remaining_links: List[Tuple[str, str]] = []
     cursor = 0
+    protected_ranges: List[Tuple[int, int]] = []
+    title_range = _find_first_nonempty_line_range(text)
+    if title_range is not None:
+        protected_ranges.append(title_range)
 
     for href, label in merged_links:
         if not href:
@@ -115,6 +156,7 @@ def _embed_links_in_hidden_text(
                 escaped_candidate,
                 placeholder,
                 search_start=cursor,
+                protected_ranges=protected_ranges,
             )
             if replaced:
                 placeholder_html.append((placeholder, anchor))
