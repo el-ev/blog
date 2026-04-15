@@ -1,6 +1,7 @@
 import html
 import os
 import re
+import shutil
 from argparse import Namespace
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -124,6 +125,13 @@ def _build_sitemap_lines(base_url: str, posts_by_date: PostsByDate) -> List[str]
     return sitemap_lines
 
 
+def _copy_root_static_file(driver_dir: str, root_dir: str, filename: str) -> str:
+    src_path = os.path.join(driver_dir, filename)
+    dst_path = os.path.join(root_dir, filename)
+    shutil.copy2(src_path, dst_path)
+    return dst_path
+
+
 def _build_post_permalink(base_url: str, post_link: str) -> str:
     rel_link_clean = post_link.lstrip("./")
     if rel_link_clean.endswith("index.html"):
@@ -245,6 +253,7 @@ def update_content(args: Namespace) -> None:
 
     root_dir: str = args.root_dir
     os.makedirs(root_dir, exist_ok=True)
+    robots_path = _copy_root_static_file(base_dir, root_dir, "robots.txt")
     content_asset_dir = os.path.join(root_dir, "assets")
     asset_context = build_driver_asset_context(base_dir, root_dir)
     base_url = resolve_base_url(args)
@@ -324,5 +333,6 @@ def update_content(args: Namespace) -> None:
         f.write("\n".join(rss_lines))
 
     print(f"Content page updated in {root_dir}.")
+    print(f"Robots file generated at {robots_path}.")
     print(f"Sitemap generated at {sitemap_path}.")
     print(f"RSS feed generated at {rss_path}.")
