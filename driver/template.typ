@@ -19,17 +19,16 @@
   )
 }
 
-#let info(body) = block(
+#let info(body) = [#block(
   fill: luma(248),
   stroke: (left: 0.18em + luma(120)),
   width: 100%,
   inset: (x: 1em, y: 0.85em),
   radius: 0.15em,
-  [
-    #set text(fill: luma(20))
-    #body
-  ],
-)
+)[
+  #set text(fill: luma(20))
+  #body
+] <info-block>]
 
 #let numbered_image(image_body, description) = figure(
   image_body,

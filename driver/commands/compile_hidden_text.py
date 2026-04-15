@@ -1,3 +1,4 @@
+import hashlib
 import html
 import os
 import re
@@ -514,6 +515,51 @@ def _extract_bullet_items(line: str) -> List[str]:
     return []
 
 
+def _inject_info_block_placeholders(
+    inner_hidden: str,
+    source_info_blocks: List[str],
+    placeholder_html: List[Tuple[str, str]],
+) -> Tuple[str, Set[str]]:
+    info_placeholders: Set[str] = set()
+    normalized = inner_hidden.replace("\r\n", "\n").replace("\r", "\n")
+
+    for info_text in source_info_blocks:
+        flat = re.sub(r"\s+", " ", info_text).strip()
+        if not flat:
+            continue
+
+        lines = normalized.split("\n")
+        for i, line in enumerate(lines):
+            if not _normalize_text_for_match(line):
+                continue
+            if _normalize_text_for_match(line) not in _normalize_text_for_match(flat):
+                continue
+
+            # TODO: this stops at the first blank line, so multi-paragraph info
+            # blocks only have their first paragraph wrapped. Fix by matching
+            # the full flattened info_text across blank-line-separated groups.
+            j = i
+            while j < len(lines) and lines[j].strip():
+                j += 1
+
+            block_lines = [l for l in lines[i:j] if l.strip()]
+            if not block_lines:
+                continue
+
+            inner_content = "".join(f"<p>{l}</p>" for l in block_lines)
+            placeholder = _make_hidden_placeholder(len(placeholder_html))
+            placeholder_html.append((
+                placeholder,
+                f'<blockquote class="info-block">{inner_content}</blockquote>',
+            ))
+            info_placeholders.add(placeholder)
+            lines[i:j] = [placeholder]
+            normalized = "\n".join(lines)
+            break
+
+    return normalized, info_placeholders
+
+
 def _paragraphize_hidden_text(
     inner_hidden: str,
     placeholder_html: List[Tuple[str, str]],
@@ -582,7 +628,7 @@ def _paragraphize_hidden_text(
         ):
             flush_current()
             close_list()
-            parts.append(f"<p>{line}</p>")
+            parts.append(f'<p class="subtitle">{line}</p>')
             subtitle_emitted = True
             continue
 
@@ -666,6 +712,8 @@ def build_final_hidden_text(
     asset_hash: str,
     last_revision_date: Optional[str],
     last_revision_url: Optional[str],
+    source_info_blocks: Optional[List[str]] = None,
+    source_images: Optional[List[Tuple[str, str]]] = None,
     nav_links: Optional[List[Tuple[str, str]]] = None,
 ) -> str:
     _, extracted_hidden = extract_pdf_text(
@@ -685,6 +733,13 @@ def build_final_hidden_text(
         source_tables,
         placeholder_html,
     )
+    info_placeholders: Set[str] = set()
+    if source_info_blocks:
+        inner_hidden, info_placeholders = _inject_info_block_placeholders(
+            inner_hidden,
+            source_info_blocks,
+            placeholder_html,
+        )
     embedded_hidden_text, remaining_links = _embed_links_in_hidden_text(
         inner_hidden,
         source_links,
@@ -705,9 +760,18 @@ def build_final_hidden_text(
     paragraphized_hidden_text = _paragraphize_hidden_text(
         embedded_hidden_text,
         placeholder_html,
-        block_placeholders | heading_placeholders | table_placeholders,
+        block_placeholders | heading_placeholders | table_placeholders | info_placeholders,
         post_subtitle,
     )
+    if source_images:
+        for source, alt in source_images:
+            src_hash = hashlib.sha1(source.encode()).hexdigest()[:6]
+            webp_name = f"image.{src_hash}.{asset_hash}.webp"
+            img_src = html.escape(f"assets/{webp_name}", quote=True)
+            paragraphized_hidden_text += (
+                f'\n<figure><img src="{img_src}"'
+                f' alt="{html.escape(alt, quote=True)}"></figure>'
+            )
     if nav_links:
         nav_items = "".join(
             f'<a href="{html.escape(href, quote=True)}" tabindex="-1">'

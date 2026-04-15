@@ -1157,6 +1157,81 @@ def extract_typst_tables_from_content(
     )
 
 
+def extract_typst_images(
+    main_typ_path: str,
+    query_root: str,
+    inputs: Optional[Dict[str, str]] = None,
+) -> List[Tuple[str, str]]:
+    results: List[Tuple[str, str]] = []
+    for item in _query_typst_json_nodes(
+        main_typ_path=main_typ_path,
+        query_root=query_root,
+        selector="image",
+        query_label="images",
+        parse_label="Typst image query output",
+        inputs=inputs,
+    ):
+        alt = item.get("alt")
+        if not alt or not isinstance(alt, str):
+            continue
+        alt = alt.strip()
+        source = item.get("source", "")
+        if alt and source:
+            results.append((source, alt))
+    return results
+
+
+def extract_typst_images_from_content(
+    source_content: Union[str, bytes],
+    query_root: str,
+    inputs: Optional[Dict[str, str]] = None,
+) -> List[Tuple[str, str]]:
+    return _extract_typst_from_content(
+        source_content=source_content,
+        query_root=query_root,
+        query_prefix=".image-query-",
+        extractor=extract_typst_images,
+        inputs=inputs,
+    )
+
+
+def extract_typst_info_blocks(
+    main_typ_path: str,
+    query_root: str,
+    inputs: Optional[Dict[str, str]] = None,
+) -> List[str]:
+    blocks: List[str] = []
+    for item in _query_typst_json_nodes(
+        main_typ_path=main_typ_path,
+        query_root=query_root,
+        selector="<info-block>",
+        query_label="info blocks",
+        parse_label="Typst info block query output",
+        inputs=inputs,
+    ):
+        body = item.get("body")
+        if body is None:
+            continue
+        text = re.sub(r"\s+", " ", _flatten_query_text(body)).strip()
+        if text:
+            blocks.append(text)
+    return blocks
+
+
+def extract_typst_info_blocks_from_content(
+    source_content: Union[str, bytes],
+    query_root: str,
+    inputs: Optional[Dict[str, str]] = None,
+) -> List[str]:
+    return _extract_typst_from_content(
+        source_content=source_content,
+        query_root=query_root,
+        query_prefix=".info-query-",
+        extractor=extract_typst_info_blocks,
+        inputs=inputs,
+    )
+
+
 def build_raw_copy_assets(
     raw_entries: List[Tuple[str, bool]],
     asset_dir: Optional[str] = None,
@@ -2399,8 +2474,9 @@ def _convert_to_webp(src_bytes: bytes, dst_path: str) -> None:
         img.save(dst_path, "webp", quality=85)
 
 
-def _build_generated_driver_image_name(image_index: int, asset_hash: str) -> str:
-    return f"image{image_index}.{asset_hash}.webp"
+def _build_generated_driver_image_name(image_rel: str, asset_hash: str) -> str:
+    src_hash = hashlib.sha1(image_rel.encode()).hexdigest()[:_ASSET_HASH_LENGTH]
+    return f"image.{src_hash}.{asset_hash}.webp"
 
 
 def _is_generated_driver_image_asset(filename: str) -> bool:
@@ -2479,10 +2555,7 @@ def _replace_driver_image_anchors(
 
         webp_name = image_asset_names.get(image_rel)
         if webp_name is None:
-            webp_name = _build_generated_driver_image_name(
-                len(image_asset_names) + 1,
-                asset_hash,
-            )
+            webp_name = _build_generated_driver_image_name(image_rel, asset_hash)
             image_asset_names[image_rel] = webp_name
         dst_path = os.path.join(svg_dest_dir, webp_name)
         if not os.path.exists(dst_path):
