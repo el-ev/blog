@@ -2308,9 +2308,57 @@ def _resolve_post_index_title_from_href(
     return _read_html_title(target_path)
 
 
+def _normalize_site_href_for_label(
+    href: str,
+    site_base_url: Optional[str],
+) -> Optional[str]:
+    if not site_base_url:
+        return None
+
+    parsed_href = urlparse(href)
+    if parsed_href.scheme not in {"http", "https"} or not parsed_href.netloc:
+        return None
+
+    parsed_site = urlparse(site_base_url)
+    site_hostname = parsed_site.hostname
+    href_hostname = parsed_href.hostname
+    if not site_hostname or not href_hostname:
+        return None
+    if site_hostname.lower() != href_hostname.lower():
+        return None
+
+    site_path = parsed_site.path or "/"
+    href_path = parsed_href.path or "/"
+    normalized_site_path = site_path.rstrip("/")
+    normalized_href_path = href_path.rstrip("/")
+
+    if normalized_site_path and normalized_site_path != normalized_href_path:
+        site_prefix = f"{normalized_site_path}/"
+        href_with_slash = f"{normalized_href_path}/" if normalized_href_path else "/"
+        if not href_with_slash.startswith(site_prefix):
+            return None
+        relative_path = href_with_slash[len(site_prefix) :].rstrip("/")
+    else:
+        relative_path = ""
+
+    if not relative_path:
+        normalized_path = "index.html"
+    elif relative_path.endswith(".html"):
+        normalized_path = relative_path
+    elif "." not in os.path.basename(relative_path):
+        normalized_path = f"{relative_path}/index.html"
+    else:
+        normalized_path = relative_path
+
+    if parsed_href.query:
+        return f"{normalized_path}?{parsed_href.query}"
+    return normalized_path
+
+
 def _infer_svg_anchor_label(
     href: Optional[str],
     svg_path: Optional[str] = None,
+    site_base_url: Optional[str] = None,
 ) -> Optional[str]:
     if href is None:
         return None
@@ -2330,21 +2378,28 @@ def _infer_svg_anchor_label(
             return "Copy"
         return "Action"
 
-    if stripped_href.startswith(("http://", "https://")):
-        parsed = urlparse(stripped_href)
-        if parsed.netloc:
-            return f"External: {parsed.netloc}"
-        return "External"
+    normalized_internal_href = _normalize_site_href_for_label(
+        stripped_href,
+        site_base_url=site_base_url,
+    )
+    href_for_inference = normalized_internal_href or stripped_href
 
-    post_title = _resolve_post_index_title_from_href(stripped_href, svg_path)
+    if stripped_href.startswith(("http://", "https://")):
+        if normalized_internal_href is None:
+            parsed = urlparse(stripped_href)
+            if parsed.netloc:
+                return f"External: {parsed.netloc}"
+            return "External"
+
+    post_title = _resolve_post_index_title_from_href(href_for_inference, svg_path)
     if post_title is not None:
         return post_title
 
-    index_label = _infer_index_href_label(stripped_href)
+    index_label = _infer_index_href_label(href_for_inference)
     if index_label is not None:
         return index_label
 
-    href_lower = stripped_href.lower()
+    href_lower = href_for_inference.lower()
     if href_lower.endswith("rss.xml"):
         return "RSS"
     if href_lower.endswith("meta.html"):
@@ -2360,12 +2415,17 @@ def _infer_svg_anchor_label(
 def _inject_svg_anchor_accessibility(
     svg_data: str,
     svg_path: Optional[str] = None,
+    site_base_url: Optional[str] = None,
 ) -> str:
     def _rewrite_anchor(match: re.Match) -> str:
         attrs = match.group("attrs")
         body = match.group("body")
         href = _extract_anchor_href(attrs)
-        label = _infer_svg_anchor_label(href, svg_path=svg_path)
+        label = _infer_svg_anchor_label(
+            href,
+            svg_path=svg_path,
+            site_base_url=site_base_url,
+        )
         if label is None:
             return match.group(0)
 
@@ -2418,7 +2478,10 @@ def _inject_svg_anchor_accessibility(
     )
 
 
-def _normalize_svg_href_file(svg_path: str) -> None:
+def _normalize_svg_href_file(
+    svg_path: str,
+    site_base_url: Optional[str] = None,
+) -> None:
     if not os.path.isfile(svg_path):
         return
 
@@ -2430,6 +2493,7 @@ def _normalize_svg_href_file(svg_path: str) -> None:
     normalized_svg_data = _inject_svg_anchor_accessibility(
         normalized_svg_data,
         svg_path=svg_path,
+        site_base_url=site_base_url,
     )
     if normalized_svg_data == svg_data:
         return
@@ -2456,13 +2520,14 @@ def _prepare_anchor_hrefs_for_svgo_file(svg_path: str) -> None:
 def _optimize_svg_with_normalized_href(
     svg_path: str,
     preserve_ids: bool = False,
+    site_base_url: Optional[str] = None,
 ) -> None:
     if not os.path.isfile(svg_path):
         return
 
     _prepare_anchor_hrefs_for_svgo_file(svg_path)
     _run_svgo(svg_path, preserve_ids=preserve_ids)
-    _normalize_svg_href_file(svg_path)
+    _normalize_svg_href_file(svg_path, site_base_url=site_base_url)
 
 
 def _convert_to_webp(src_bytes: bytes, dst_path: str) -> None:
@@ -2582,6 +2647,7 @@ def patch_svg_file(
     dst_path: str,
     svg_href_rewrites: Optional[Dict[str, str]],
     href_base_dir: Optional[str] = None,
+    site_base_url: Optional[str] = None,
     image_source_dir: Optional[str] = None,
     asset_hash: Optional[str] = None,
     image_asset_names: Optional[Dict[str, str]] = None,
@@ -2640,7 +2706,11 @@ def patch_svg_file(
         return f'<a target="_top"{attrs}>'
 
     svg_data = re.sub(r"<a([^>]*)>", _rewrite_anchor_tag, svg_data)
-    svg_data = _inject_svg_anchor_accessibility(svg_data, svg_path=dst_path)
+    svg_data = _inject_svg_anchor_accessibility(
+        svg_data,
+        svg_path=dst_path,
+        site_base_url=site_base_url,
+    )
     svg_data = _inject_svg_theme_classes(svg_data)
     svg_data = _inject_svg_theme_style(svg_data)
 
@@ -2717,6 +2787,7 @@ def build_html_from_svgs(
     inline_script: str = "",
     image_source_dir: Optional[str] = None,
     asset_hash: Optional[str] = None,
+    site_base_url: Optional[str] = None,
 ) -> str:
     with open(template_path, "r", encoding="utf-8") as f:
         template = f.read()
@@ -2760,6 +2831,7 @@ def build_html_from_svgs(
             dst_path,
             svg_href_rewrites,
             href_base_dir=html_dir,
+            site_base_url=site_base_url,
             image_source_dir=image_source_dir,
             asset_hash=asset_hash,
             image_asset_names=image_asset_names,
@@ -2787,9 +2859,16 @@ def build_html_from_svgs(
         )
 
     for svg_path in patched_svg_paths:
-        _optimize_svg_with_normalized_href(svg_path)
+        _optimize_svg_with_normalized_href(
+            svg_path,
+            site_base_url=site_base_url,
+        )
     if enable_shared_glyph_extraction and glyph_asset_path:
-        _optimize_svg_with_normalized_href(glyph_asset_path, preserve_ids=True)
+        _optimize_svg_with_normalized_href(
+            glyph_asset_path,
+            preserve_ids=True,
+            site_base_url=site_base_url,
+        )
 
     for svg_path, page_title in page_render_items:
         page_href = build_local_asset_href(svg_path)
@@ -2931,6 +3010,7 @@ def compile_and_build_html(
     inline_style: str = "",
     inline_script: str = "",
     image_source_dir: Optional[str] = None,
+    site_base_url: Optional[str] = None,
 ) -> str:
     display_compiled_date = datetime.now().strftime("%Y-%m-%d")
     resolved_inputs_svg = dict(inputs_svg) if inputs_svg is not None else {}
@@ -2992,4 +3072,5 @@ def compile_and_build_html(
         inline_script=inline_script,
         image_source_dir=image_source_dir,
         asset_hash=asset_hash,
+        site_base_url=site_base_url,
     )

@@ -172,6 +172,7 @@ def _submit_to_destination(
             global_glyph_map_path=asset_context.global_glyph_map_path,
             rss_feed_path=os.path.join(args.root_dir, "rss.xml"),
             og_url=meta_og_url,
+            site_base_url=base_url,
         )
 
         write_workspace_manifest(

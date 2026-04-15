@@ -159,6 +159,7 @@ def compile_meta_page(
     global_glyph_map_path: str,
     rss_feed_path: Optional[str] = None,
     og_url: Optional[str] = None,
+    site_base_url: Optional[str] = None,
     inline_style: str = "",
     inline_script: str = "",
 ) -> None:
@@ -225,6 +226,7 @@ def compile_meta_page(
             rss_feed_path=rss_feed_path,
             og_type="article",
             og_url=og_url,
+            site_base_url=site_base_url,
             enable_shared_glyph_extraction=False,
             global_glyph_asset_path=global_glyph_asset_path,
             global_glyph_map_path=global_glyph_map_path,

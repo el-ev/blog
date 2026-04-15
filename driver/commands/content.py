@@ -285,6 +285,7 @@ def update_content(args: Namespace) -> None:
         rss_feed_path=os.path.join(root_dir, "rss.xml"),
         og_type="website",
         og_url=og_url,
+        site_base_url=base_url,
         global_glyph_asset_path=asset_context.global_glyph_asset_path,
         global_glyph_map_path=asset_context.global_glyph_map_path,
         inline_style=asset_context.web_assets.inline_style,
