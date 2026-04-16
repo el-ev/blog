@@ -66,13 +66,6 @@ def _restore_destination_backup(dest_dir: str, backup_dir: Optional[str]) -> Non
     os.replace(backup_dir, dest_dir)
 
 
-def _resolve_amend_workspace_path(args: Namespace, workspace_name: str, source_dir: str) -> str:
-    workspace_path = safe_join_child(args.workspace_base, workspace_name)
-    if os.path.isdir(workspace_path):
-        return workspace_path
-    return source_dir
-
-
 def _submit_to_destination(
     args: Namespace,
     workspace_name: str,
@@ -165,7 +158,6 @@ def _submit_to_destination(
             meta_fields=meta_fields,
             workspace_files=workspace_files,
             asset_context=asset_context,
-            rss_feed_path=os.path.join(args.root_dir, "rss.xml"),
             og_url=meta_og_url,
             site_base_url=base_url,
         )
@@ -281,7 +273,9 @@ def _amend_latest_workspace(
         date_str=date_str,
         entry_name=dest_dir_name,
     )
-    workspace_path = _resolve_amend_workspace_path(args, workspace_name, source_dir)
+    workspace_path = safe_join_child(args.workspace_base, workspace_name)
+    if not os.path.isdir(workspace_path):
+        workspace_path = source_dir
     _submit_to_destination(
         args=args,
         workspace_name=workspace_name,

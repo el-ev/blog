@@ -2,377 +2,53 @@ import hashlib
 import html
 import os
 import re
-from collections import defaultdict
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
-from .utils import extract_pdf_text, PostSourceContent
-
-_HIDDEN_PLACEHOLDER_PREFIX = "__HIDDEN_HTML_"
-_ORDERED_LIST_ITEM_PATTERN = re.compile(r"(?:^|\s)(\d+)\.\s+")
-
-
-def _index_in_hidden_placeholder(text: str, idx: int) -> bool:
-    start = text.rfind(_HIDDEN_PLACEHOLDER_PREFIX, 0, idx + 1)
-    if start < 0:
-        return False
-    end = text.find("__", start + len(_HIDDEN_PLACEHOLDER_PREFIX))
-    if end < 0:
-        return False
-    return start <= idx < end + 2
+from .utils import (
+    _extract_typst_table_rows,
+    _flatten_query_text,
+    extract_doc_structure_from_content,
+    make_raw_copy_id,
+)
 
 
-def _match_overlaps_protected_range(
-    start: int,
-    end: int,
-    protected_ranges: List[Tuple[int, int]],
-) -> bool:
-    for protected_start, protected_end in protected_ranges:
-        if start < protected_end and end > protected_start:
-            return True
-    return False
-
-
-def _find_first_nonempty_line_range(text: str) -> Optional[Tuple[int, int]]:
-    cursor = 0
-    for line in text.splitlines(keepends=True):
-        line_start = cursor
-        line_end = cursor + len(line)
-        if line.strip():
-            trimmed_end = line_end
-            while trimmed_end > line_start and text[trimmed_end - 1] in "\r\n":
-                trimmed_end -= 1
-            return line_start, trimmed_end
-        cursor = line_end
-
-    if text.strip():
-        stripped = text.strip()
-        start = text.find(stripped)
-        if start >= 0:
-            return start, start + len(stripped)
-    return None
-
-
-def _replace_first_with_options(
+def _embed_links_in_text_fragment(
     text: str,
-    old: str,
-    new: str,
-    independent_only: bool = False,
-    search_start: int = 0,
-    protected_ranges: Optional[List[Tuple[int, int]]] = None,
-) -> Tuple[str, bool, int]:
-    if not old:
-        return text, False, -1
-
-    next_search_start = max(search_start, 0)
-    safe_protected_ranges = protected_ranges or []
-    while True:
-        idx = text.find(old, next_search_start)
-        if idx < 0:
-            return text, False, -1
-        if not _index_in_hidden_placeholder(text, idx) and (
-            not independent_only
-            or _is_independent_text_match(text, idx, idx + len(old))
-        ) and not _match_overlaps_protected_range(
-            idx,
-            idx + len(old),
-            safe_protected_ranges,
-        ):
-            return text[:idx] + new + text[idx + len(old) :], True, idx
-        next_search_start = idx + 1
-
-
-def _is_independent_text_match(text: str, start: int, end: int) -> bool:
-    def is_word_char(char: str) -> bool:
-        return char.isalnum() or char == "_"
-
-    if start > 0 and is_word_char(text[start - 1]):
-        return False
-    if end < len(text) and is_word_char(text[end]):
-        return False
-    return True
-
-
-def _count_non_placeholder_occurrences(
-    text: str,
-    needle: str,
-    independent_only: bool = False,
-) -> int:
-    if not needle:
-        return 0
-
-    count = 0
-    search_start = 0
-    while True:
-        idx = text.find(needle, search_start)
-        if idx < 0:
-            return count
-        if not _index_in_hidden_placeholder(text, idx) and (
-            not independent_only
-            or _is_independent_text_match(text, idx, idx + len(needle))
-        ):
-            count += 1
-        search_start = idx + 1
-
-
-def _make_hidden_placeholder(index: int) -> str:
-    return f"__HIDDEN_HTML_{index}__"
-
-
-def _embed_links_in_hidden_text(
-    inner_hidden: str,
-    merged_links: List[Tuple[str, str]],
-    placeholder_html: List[Tuple[str, str]],
-) -> Tuple[str, List[Tuple[str, str]]]:
-    text = inner_hidden
-    remaining_links: List[Tuple[str, str]] = []
-    cursor = 0
-    protected_ranges: List[Tuple[int, int]] = []
-    title_range = _find_first_nonempty_line_range(text)
-    if title_range is not None:
-        protected_ranges.append(title_range)
-
-    for href, label in merged_links:
+    source_links: List[Tuple[str, str]],
+) -> str:
+    """Embed links into a text fragment, skipping occurrences already inside anchors."""
+    for href, label in source_links:
         if not href:
             continue
-
-        candidates: List[str] = []
-        clean_label = label.strip() if label else ""
-        if clean_label:
-            candidates.append(clean_label)
-        if href not in candidates:
-            candidates.append(href)
-
-        placed = False
+        clean_label = label.strip()
+        if not clean_label:
+            continue
+        escaped_label = html.escape(clean_label)
+        if escaped_label not in text:
+            continue
         safe_href = html.escape(href, quote=True)
-        for candidate in candidates:
-            escaped_candidate = html.escape(candidate)
-            if not escaped_candidate:
-                continue
-            anchor = (
-                f'<a href="{safe_href}" tabindex="-1">{escaped_candidate}</a>'
-            )
-            placeholder = _make_hidden_placeholder(len(placeholder_html))
-            text, replaced, replaced_at = _replace_first_with_options(
-                text,
-                escaped_candidate,
-                placeholder,
-                search_start=cursor,
-                protected_ranges=protected_ranges,
-            )
-            if replaced:
-                placeholder_html.append((placeholder, anchor))
-                cursor = replaced_at + len(placeholder)
-                placed = True
+        anchor = f'<a href="{safe_href}" tabindex="-1">{escaped_label}</a>'
+        search_pos = 0
+        while True:
+            idx = text.find(escaped_label, search_pos)
+            if idx == -1:
                 break
-
-        if not placed:
-            remaining_links.append((href, label or href))
-
-    return text, remaining_links
-
-
-def _embed_raws_in_hidden_text(
-    inner_hidden: str,
-    source_raws: List[Tuple[str, bool]],
-    placeholder_start_index: int = 0,
-) -> Tuple[str, List[str], List[str], List[Tuple[str, str]], Set[str]]:
-    text = inner_hidden
-    remaining_inline_raws: List[str] = []
-    remaining_block_raws: List[str] = []
-    placeholder_html: List[Tuple[str, str]] = []
-    block_placeholders: Set[str] = set()
-    remaining_query_counts: Dict[str, int] = defaultdict(int)
-
-    for raw_text, _ in source_raws:
-        normalized_raw = raw_text.replace("\r\n", "\n").replace("\r", "\n")
-        if not normalized_raw.strip():
-            continue
-        stripped_raw = normalized_raw.strip("\n")
-        candidate_texts = [normalized_raw]
-        if stripped_raw and stripped_raw != normalized_raw:
-            candidate_texts.append(stripped_raw)
-        for candidate_text in candidate_texts:
-            escaped_candidate = html.escape(candidate_text)
-            if not escaped_candidate:
+            before = text[:idx]
+            inside_anchor = (
+                before.count("<a ") + before.count("<a>") > before.count("</a>")
+            )
+            if inside_anchor:
+                search_pos = idx + len(escaped_label)
                 continue
-            remaining_query_counts[escaped_candidate] += 1
-
-    for raw_text, is_block in source_raws:
-        normalized_raw = raw_text.replace("\r\n", "\n").replace("\r", "\n")
-        if not normalized_raw.strip():
-            continue
-
-        candidates: List[str] = [normalized_raw]
-        stripped_raw = normalized_raw.strip("\n")
-        if stripped_raw and stripped_raw not in candidates:
-            candidates.append(stripped_raw)
-
-        placed = False
-        for candidate in candidates:
-            escaped_candidate = html.escape(candidate)
-            if not escaped_candidate:
-                continue
-
-            expected_count = remaining_query_counts[escaped_candidate]
-            if expected_count <= 0:
-                continue
-
-            occurrence_count = _count_non_placeholder_occurrences(
-                text,
-                escaped_candidate,
-                independent_only=True,
-            )
-            if occurrence_count != expected_count:
-                continue
-
-            placeholder = _make_hidden_placeholder(
-                placeholder_start_index + len(placeholder_html)
-            )
-            wrapped_candidate = (
-                f"<pre><code>{escaped_candidate}</code></pre>"
-                if is_block
-                else f"<code>{escaped_candidate}</code>"
-            )
-            text, replaced, _ = _replace_first_with_options(
-                text,
-                escaped_candidate,
-                placeholder,
-                independent_only=True,
-            )
-            if replaced:
-                placeholder_html.append((placeholder, wrapped_candidate))
-                if is_block:
-                    block_placeholders.add(placeholder)
-                remaining_query_counts[escaped_candidate] = expected_count - 1
-                placed = True
-                break
-
-        if not placed:
-            if is_block:
-                remaining_block_raws.append(normalized_raw)
-            else:
-                remaining_inline_raws.append(normalized_raw)
-
-    return (
-        text,
-        remaining_inline_raws,
-        remaining_block_raws,
-        placeholder_html,
-        block_placeholders,
-    )
-def _restore_hidden_placeholders(
-    text: str,
-    placeholder_html: List[Tuple[str, str]],
-) -> str:
-    restored = text
-    for placeholder, html_fragment in placeholder_html:
-        restored = restored.replace(placeholder, html_fragment)
-    return restored
+            text = text[:idx] + anchor + text[idx + len(escaped_label) :]
+            break
+    return text
 
 
-def _normalize_text_for_match(text: str) -> str:
-    normalized = html.unescape(text)
-    normalized = (
-        normalized.replace("’", "'")
-        .replace("‘", "'")
-        .replace("“", '"')
-        .replace("”", '"')
-    )
-    return re.sub(r"\s+", " ", normalized).strip().casefold()
-
-
-def _line_matches_source_text(line: str, source_text: str) -> bool:
-    if not source_text:
-        return False
-    return _normalize_text_for_match(line) == _normalize_text_for_match(source_text)
-
-
-def _split_heading_prefix(line: str, heading_text: str) -> Optional[str]:
-    stripped_line = re.sub(r"\s+", " ", line).strip()
-    stripped_heading = re.sub(r"\s+", " ", heading_text).strip()
-    if not stripped_line or not stripped_heading:
-        return None
-    if stripped_line == stripped_heading:
-        return ""
-    prefix = f"{stripped_heading} "
-    if stripped_line.startswith(prefix):
-        return stripped_line[len(prefix) :].strip()
-    return None
-
-
-def _inject_heading_placeholders(
-    inner_hidden: str,
-    source_headings: List[Tuple[int, str]],
-    placeholder_html: List[Tuple[str, str]],
-) -> Tuple[str, Set[str]]:
-    normalized = inner_hidden.replace("\r\n", "\n").replace("\r", "\n")
-    pending_headings: List[Tuple[int, str]] = []
-    for level, text in source_headings:
-        clean = re.sub(r"\s+", " ", text).strip()
-        if clean:
-            pending_headings.append((level, html.escape(clean)))
-
-    heading_placeholders: Set[str] = set()
-    if not pending_headings:
-        return normalized, heading_placeholders
-
-    output_lines: List[str] = []
-    for raw_line in normalized.split("\n"):
-        line = raw_line.strip()
-        if not line:
-            output_lines.append("")
-            continue
-
-        current_line = re.sub(r"\s+", " ", line).strip()
-        while pending_headings:
-            level, heading_text = pending_headings[0]
-            remainder = _split_heading_prefix(current_line, heading_text)
-            if remainder is None:
-                break
-            heading_level = min(max(level, 2), 6)
-            placeholder = _make_hidden_placeholder(len(placeholder_html))
-            placeholder_html.append(
-                (
-                    placeholder,
-                    f"<h{heading_level}>{heading_text}</h{heading_level}>",
-                )
-            )
-            heading_placeholders.add(placeholder)
-            output_lines.append(placeholder)
-            pending_headings.pop(0)
-            current_line = remainder
-            if not current_line:
-                break
-
-        if current_line:
-            output_lines.append(current_line)
-
-    return "\n".join(output_lines), heading_placeholders
-
-
-def _replace_table_text_with_placeholder(
-    text: str,
-    tokens: List[str],
-    placeholder: str,
-) -> Tuple[str, bool]:
-    cleaned_tokens = [token for token in tokens if token]
-    if not cleaned_tokens:
-        return text, False
-
-    pattern = re.compile(r"\s+".join(re.escape(token) for token in cleaned_tokens))
-    search_start = 0
-    while True:
-        match = pattern.search(text, pos=search_start)
-        if not match:
-            return text, False
-        if not _index_in_hidden_placeholder(text, match.start()):
-            return text[: match.start()] + placeholder + text[match.end() :], True
-        search_start = match.start() + 1
-
-
-def _render_table_html(table_rows: List[List[Dict[str, Any]]]) -> Tuple[str, List[str]]:
+def _render_table_html(table_rows: List[List[Dict[str, Any]]]) -> str:
+    """Render extracted table rows as an HTML <table> string."""
     if not table_rows:
-        return "", []
+        return ""
 
     header_row = table_rows[0]
     has_header = len(table_rows) > 1 and bool(header_row)
@@ -382,7 +58,6 @@ def _render_table_html(table_rows: List[List[Dict[str, Any]]]) -> Tuple[str, Lis
             break
 
     html_parts: List[str] = ["<table>"]
-    match_tokens: List[str] = []
 
     def build_row_html(
         row_cells: List[Dict[str, Any]], cell_tag: str, scope_attr: str = ""
@@ -391,14 +66,11 @@ def _render_table_html(table_rows: List[List[Dict[str, Any]]]) -> Tuple[str, Lis
         for cell in row_cells:
             raw_text = re.sub(r"\s+", " ", str(cell["text"])).strip()
             escaped_text = html.escape(raw_text)
-            if escaped_text:
-                match_tokens.append(escaped_text)
-            content_html = (
-                f"<code>{escaped_text}</code>"
-                if bool(cell["is_inline_code"])
-                else escaped_text
-            )
-
+            if bool(cell["is_inline_code"]):
+                cell_copy_id = make_raw_copy_id(raw_text)
+                content_html = f'<code id="raw-{cell_copy_id}">{escaped_text}</code>'
+            else:
+                content_html = escaped_text
             attrs: List[str] = []
             colspan = int(cell["colspan"])
             rowspan = int(cell["rowspan"])
@@ -426,339 +98,284 @@ def _render_table_html(table_rows: List[List[Dict[str, Any]]]) -> Tuple[str, Lis
         html_parts.append(build_row_html(row, "td"))
     html_parts.append("</tbody>")
     html_parts.append("</table>")
-    return "".join(html_parts), match_tokens
+    return "".join(html_parts)
 
 
-def _inject_table_placeholders(
-    inner_hidden: str,
-    source_tables: List[Dict[str, Any]],
-    placeholder_html: List[Tuple[str, str]],
-) -> Tuple[str, Set[str]]:
-    text = inner_hidden
-    table_placeholders: Set[str] = set()
-
-    for table in source_tables:
-        rows = table["rows"]
-        if not isinstance(rows, list):
-            raise RuntimeError("Invalid Typst table extraction: rows must be list.")
-        table_html, match_tokens = _render_table_html(rows)
-        if not table_html or not match_tokens:
-            continue
-
-        placeholder = _make_hidden_placeholder(len(placeholder_html))
-        text, replaced = _replace_table_text_with_placeholder(
-            text,
-            match_tokens,
-            placeholder,
-        )
-        if not replaced:
-            continue
-        placeholder_html.append((placeholder, table_html))
-        table_placeholders.add(placeholder)
-
-    return text, table_placeholders
+def _format_numbering(n: int, fmt: str) -> str:
+    """Format a counter value according to Typst's numbering string."""
+    if fmt == "1":
+        return str(n)
+    if fmt == "a" and 1 <= n <= 26:
+        return chr(ord("a") + n - 1)
+    if fmt == "A" and 1 <= n <= 26:
+        return chr(ord("A") + n - 1)
+    return str(n)
 
 
-def _extract_ordered_items(line: str) -> List[str]:
-    stripped = line.strip()
-    if not stripped:
-        return []
+def flatten_doc_node_to_html(node: Any) -> str:
+    """Recursively convert a Typst JSON content node to an HTML string.
 
-    matches = list(_ORDERED_LIST_ITEM_PATTERN.finditer(stripped))
-    if not matches:
-        return []
-    leading_text = stripped[: matches[0].start()].strip()
-    if leading_text:
-        return []
-
-    items: List[str] = []
-    for idx, match in enumerate(matches):
-        start = match.end()
-        end = matches[idx + 1].start() if idx + 1 < len(matches) else len(stripped)
-        item = stripped[start:end].strip()
-        if item:
-            items.append(item)
-    return items
-
-
-def _extract_bullet_items(line: str) -> List[str]:
-    stripped = line.strip()
-    if not stripped:
-        return []
-    if stripped.startswith("•"):
-        return [item.strip() for item in stripped.split("•") if item.strip()]
-    if stripped.startswith("- "):
-        item = stripped[2:].strip()
-        return [item] if item else []
-    return []
-
-
-def _embed_links_in_text_fragment(
-    text: str,
-    source_links: List[Tuple[str, str]],
-) -> str:
-    """Embed links into a short text fragment without title-line protection."""
-    for href, label in source_links:
-        if not href:
-            continue
-        clean_label = label.strip()
-        if not clean_label:
-            continue
-        escaped_label = html.escape(clean_label)
-        if escaped_label not in text:
-            continue
-        safe_href = html.escape(href, quote=True)
-        anchor = f'<a href="{safe_href}" tabindex="-1">{escaped_label}</a>'
-        text = text.replace(escaped_label, anchor, 1)
-    return text
+    Handles link → <a>, inline raw → <code>, block raw → <pre><code>,
+    smartquote, space, linebreak, and styled/sequence wrappers.
+    """
+    if isinstance(node, str):
+        return html.escape(node)
+    if isinstance(node, list):
+        return "".join(flatten_doc_node_to_html(item) for item in node)
+    if isinstance(node, dict):
+        func = node.get("func")
+        if func == "space":
+            return " "
+        if func == "linebreak":
+            return "<br>"
+        if func == "smartquote":
+            c = '"' if node.get("double") else "'"
+            return html.escape(c)
+        if func == "link":
+            dest = node.get("dest", "")
+            body_html = flatten_doc_node_to_html(node.get("body", ""))
+            dest_escaped = html.escape(str(dest), quote=True)
+            return f'<a href="{dest_escaped}" tabindex="-1">{body_html}</a>'
+        if func == "raw":
+            text = node.get("text", "")
+            copy_id = make_raw_copy_id(text)
+            if node.get("block"):
+                return (
+                    f'<pre id="raw-{copy_id}"><code>{html.escape(text)}</code></pre>'
+                )
+            return f'<code id="raw-{copy_id}">{html.escape(text)}</code>'
+        parts: List[str] = []
+        text_val = node.get("text")
+        if isinstance(text_val, str):
+            parts.append(html.escape(text_val))
+        for key in ("body", "children", "child", "value", "values", "content"):
+            if key in node:
+                parts.append(flatten_doc_node_to_html(node[key]))
+        if not parts:
+            for key, value in node.items():
+                if key in ("func", "text"):
+                    continue
+                if isinstance(value, (dict, list)):
+                    parts.append(flatten_doc_node_to_html(value))
+        return "".join(parts)
+    return ""
 
 
-def _inject_info_block_placeholders(
-    inner_hidden: str,
-    source_info_blocks: List[str],
-    placeholder_html: List[Tuple[str, str]],
-    source_links: Optional[List[Tuple[str, str]]] = None,
-) -> Tuple[str, Set[str]]:
-    info_placeholders: Set[str] = set()
-    normalized = inner_hidden.replace("\r\n", "\n").replace("\r", "\n")
-
-    for info_text in source_info_blocks:
-        tokens = re.sub(r"\s+", " ", info_text).strip().split()
-        if not tokens:
-            continue
-
-        # Match the info block's tokens across whitespace and embedded
-        # placeholder strings using a whitespace-tolerant regex.
-        pattern = re.compile(
-            r"\s+".join(re.escape(tok) for tok in tokens),
-            re.DOTALL,
-        )
-        match = pattern.search(normalized)
-        if not match:
-            continue
-
-        # Expand match to encompass full lines.
-        line_start = normalized.rfind("\n", 0, match.start())
-        line_start = 0 if line_start == -1 else line_start + 1
-        line_end_nl = normalized.find("\n", match.end())
-        line_end = len(normalized) if line_end_nl == -1 else line_end_nl
-
-        block_lines = [
-            l for l in normalized[line_start:line_end].split("\n") if l.strip()
-        ]
-        if not block_lines:
-            continue
-
-        inner_content = "\n".join(block_lines)
-        if source_links:
-            inner_content = _embed_links_in_text_fragment(inner_content, source_links)
-        inner_content = "".join(
-            f"<p>{l}</p>" for l in inner_content.split("\n") if l.strip()
-        )
-
-        placeholder = _make_hidden_placeholder(len(placeholder_html))
-        placeholder_html.append((
-            placeholder,
-            f'<blockquote class="info-block">{inner_content}</blockquote>',
-        ))
-        info_placeholders.add(placeholder)
-        normalized = normalized[:line_start] + placeholder + "\n" + normalized[line_end:]
-
-    return normalized, info_placeholders
-
-
-def _inject_figure_placeholders(
-    inner_hidden: str,
-    source_figures: List[Tuple[str, str, str]],
-    placeholder_html: List[Tuple[str, str]],
-    asset_hash: str,
-    source_links: Optional[List[Tuple[str, str]]] = None,
-) -> Tuple[str, Set[str]]:
-    """Replace 'Figure N: caption' lines with <figure><img><figcaption> blocks."""
-    figure_placeholders: Set[str] = set()
-    normalized = inner_hidden.replace("\r\n", "\n").replace("\r", "\n")
-
-    for caption_text, source, alt in source_figures:
-        tokens = re.sub(r"\s+", " ", caption_text).strip().split()
-        if not tokens:
-            continue
-
-        # Match "Figure N: caption tokens" — the "Figure N:" prefix is added
-        # automatically by Typst's figure counter in PDF output.
-        pattern = re.compile(
-            r"Figure\s+\d+:\s+" + r"\s+".join(re.escape(tok) for tok in tokens),
-            re.DOTALL | re.IGNORECASE,
-        )
-        match = pattern.search(normalized)
-        if not match:
-            # Fallback: match caption tokens alone (no "Figure N:" prefix).
-            pattern = re.compile(
-                r"\s+".join(re.escape(tok) for tok in tokens),
-                re.DOTALL,
-            )
-            match = pattern.search(normalized)
-        if not match:
-            continue
-
-        line_start = normalized.rfind("\n", 0, match.start())
-        line_start = 0 if line_start == -1 else line_start + 1
-        line_end_nl = normalized.find("\n", match.end())
-        line_end = len(normalized) if line_end_nl == -1 else line_end_nl
-
-        caption_line = normalized[line_start:line_end].strip()
-        if source_links:
-            caption_line = _embed_links_in_text_fragment(caption_line, source_links)
-
-        src_hash = hashlib.sha1(source.encode()).hexdigest()[:6]
-        webp_name = f"image.{src_hash}.{asset_hash}.webp"
-        img_src = html.escape(f"assets/{webp_name}", quote=True)
-
-        if alt:
-            img_tag = (
-                f'<img src="{img_src}" alt="{html.escape(alt, quote=True)}">'
-            )
-        else:
-            img_tag = f'<img src="{img_src}" role="presentation">'
-
-        figure_html = (
-            f"<figure>{img_tag}"
-            f"<figcaption>{caption_line}</figcaption>"
-            f"</figure>"
-        )
-
-        placeholder = _make_hidden_placeholder(len(placeholder_html))
-        placeholder_html.append((placeholder, figure_html))
-        figure_placeholders.add(placeholder)
-        normalized = normalized[:line_start] + placeholder + "\n" + normalized[line_end:]
-
-    return normalized, figure_placeholders
-
-
-def _paragraphize_hidden_text(
-    inner_hidden: str,
-    placeholder_html: List[Tuple[str, str]],
-    block_placeholders: Set[str],
+def build_hidden_text(
+    doc_elements: List[Dict[str, Any]],
+    post_title: str,
     post_subtitle: Optional[str],
+    asset_hash: str,
+    last_revision_date: Optional[str],
+    last_revision_url: Optional[str],
+    nav_links: Optional[List[Tuple[str, str]]] = None,
+    source_links: Optional[List[Tuple[str, str]]] = None,
 ) -> str:
-    normalized = inner_hidden.replace("\r\n", "\n").replace("\r", "\n")
+    """Build sr-only HTML from an ordered list of <driver-doc> metadata elements."""
     parts: List[str] = []
-    current_lines: List[str] = []
-    open_list_tag: Optional[str] = None
-    title_emitted = False
-    subtitle_emitted = False
-    date_emitted = False
+    parts.append(f"<h1>{html.escape(post_title)}</h1>")
+    if post_subtitle:
+        parts.append(f'<p class="subtitle">{html.escape(post_subtitle)}</p>')
 
-    def flush_current() -> None:
-        if not current_lines:
-            return
-        paragraph = re.sub(r"\s+", " ", " ".join(current_lines)).strip()
-        parts.append(f"<p>{paragraph}</p>")
-        current_lines.clear()
+    # page_header emits subtitle PAR (if present) and date PAR.
+    # The title is inside block() so it does NOT produce a par metadata node.
+    skip_count = 1 + (1 if post_subtitle else 0)
+    skipped_pars = 0
 
-    def close_list() -> None:
-        nonlocal open_list_tag
-        if not open_list_tag:
-            return
-        parts.append(f"</{open_list_tag}>")
-        open_list_tag = None
+    # State: grouping consecutive list items
+    list_tag: Optional[str] = None  # "ul" or "ol"
+    list_items: List[str] = []
 
-    def open_list(tag: str) -> None:
-        nonlocal open_list_tag
-        if open_list_tag == tag:
+    # State: table-figure caption pending until table body arrives
+    pending_table_cap: Optional[Dict[str, Any]] = None
+
+    # Per-kind figure counters (for caption labels like "Figure 1:")
+    fig_counts: Dict[str, int] = {}
+
+    def flush_list() -> None:
+        if not list_items:
             return
-        close_list()
+        tag = list_tag or "ul"
         parts.append(f"<{tag}>")
-        open_list_tag = tag
+        parts.extend(list_items)
+        parts.append(f"</{tag}>")
+        list_items.clear()
 
-    for raw_line in normalized.split("\n"):
-        line = raw_line.strip()
-        if not line:
-            flush_current()
-            close_list()
+    def build_fig_label(cap: Dict[str, Any], default_kind: str) -> str:
+        kind = cap.get("kind", default_kind)
+        fig_counts[kind] = fig_counts.get(kind, 0) + 1
+        n = fig_counts[kind]
+        supplement = cap.get("supplement")
+        sup_text = (
+            re.sub(r"\s+", " ", _flatten_query_text(supplement)).strip()
+            if supplement
+            else "Figure"
+        )
+        fmt = cap.get("numbering") or "1"
+        sep = cap.get("separator")
+        sep_text = (
+            re.sub(r"\s+", " ", _flatten_query_text(sep)).strip() if sep else ":"
+        )
+        num_str = _format_numbering(n, fmt)
+        return f"{sup_text}\u00a0{num_str}{sep_text}"
+
+    for elem in doc_elements:
+        t = elem.get("t")
+
+        # Skip initial page_header PARs (subtitle + date)
+        if t == "par" and skipped_pars < skip_count:
+            skipped_pars += 1
             continue
 
-        if line in block_placeholders:
-            flush_current()
-            close_list()
-            parts.append(line)
+        # Inline raws are already embedded in their parent element
+        if t == "raw" and not elem.get("bl"):
             continue
 
-        if (
-            line.startswith("Compiled on ")
-            or line.startswith("Compiled at ")
-            or re.fullmatch(r"\d+", line)
-        ):
-            flush_current()
-            close_list()
-            continue
+        # Any non-list element flushes the pending list buffer
+        if t not in ("li", "eli"):
+            flush_list()
+            list_tag = None
 
-        if not title_emitted:
-            flush_current()
-            close_list()
-            parts.append(f"<h1>{line}</h1>")
-            title_emitted = True
-            continue
+        if t == "h":
+            # Offset Typst heading levels by 1 (title is <h1>, sections are <h2>+)
+            level = min(elem.get("l", 1) + 1, 6)
+            body_html = flatten_doc_node_to_html(elem.get("b", ""))
+            parts.append(f"<h{level}>{body_html}</h{level}>")
 
-        if (
-            post_subtitle
-            and not subtitle_emitted
-            and _line_matches_source_text(line, post_subtitle)
-        ):
-            flush_current()
-            close_list()
-            parts.append(f'<p class="subtitle">{line}</p>')
-            subtitle_emitted = True
-            continue
+        elif t == "par":
+            body_html = flatten_doc_node_to_html(elem.get("b", "")).strip()
+            if body_html:
+                if source_links:
+                    body_html = _embed_links_in_text_fragment(body_html, source_links)
+                parts.append(f"<p>{body_html}</p>")
 
-        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", line) and not date_emitted:
-            flush_current()
-            close_list()
-            parts.append(f'<p><time datetime="{line}">{line}</time></p>')
-            date_emitted = True
-            continue
+        elif t == "raw":  # block raw (bl=True checked above)
+            if parts:
+                parts.append("<p></p>")
+            raw_text = elem.get("x", "")
+            copy_id = make_raw_copy_id(raw_text)
+            parts.append(
+                f'<pre id="raw-{copy_id}"><code>{html.escape(raw_text)}</code></pre>'
+            )
 
-        if line.startswith("Edited on ") or line.startswith("Last revision on "):
-            flush_current()
-            close_list()
-            parts.append(f"<p>{line}</p>")
-            continue
+        elif t == "info":
+            body_html = flatten_doc_node_to_html(elem.get("b", ""))
+            body_html = re.sub(r"\s+", " ", body_html).strip()
+            parts.append(
+                f'<blockquote class="info-block"><p>{body_html}</p></blockquote>'
+            )
 
-        ordered_items = _extract_ordered_items(line)
-        if ordered_items:
-            flush_current()
-            open_list("ol")
-            for item in ordered_items:
-                parts.append(f"<li>{item}</li>")
-            continue
+        elif t == "li":
+            if list_tag != "ul":
+                flush_list()
+                list_tag = "ul"
+            body_html = flatten_doc_node_to_html(elem.get("b", "")).strip()
+            if source_links:
+                body_html = _embed_links_in_text_fragment(body_html, source_links)
+            list_items.append(f"<li>{body_html}</li>")
 
-        bullet_items = _extract_bullet_items(line)
-        if bullet_items:
-            flush_current()
-            open_list("ul")
-            for item in bullet_items:
-                parts.append(f"<li>{item}</li>")
-            continue
+        elif t == "eli":
+            if list_tag != "ol":
+                flush_list()
+                list_tag = "ol"
+            body_html = flatten_doc_node_to_html(elem.get("b", "")).strip()
+            if source_links:
+                body_html = _embed_links_in_text_fragment(body_html, source_links)
+            list_items.append(f"<li>{body_html}</li>")
 
-        close_list()
-        current_lines.append(line)
-        if line.endswith((".", "!", "?", ":", ";", ".)", '."')):
-            flush_current()
+        elif t == "dt":
+            term_html = flatten_doc_node_to_html(elem.get("term", "")).strip()
+            desc_html = flatten_doc_node_to_html(elem.get("b", "")).strip()
+            parts.append(f"<dl><dt>{term_html}</dt><dd>{desc_html}</dd></dl>")
 
-    flush_current()
-    close_list()
-    return _restore_hidden_placeholders("\n".join(parts), placeholder_html)
+        elif t == "blockquote":
+            body_html = flatten_doc_node_to_html(elem.get("b", "")).strip()
+            parts.append(f"<blockquote><p>{body_html}</p></blockquote>")
 
+        elif t == "eq":
+            alt = elem.get("alt")
+            if isinstance(alt, str) and alt.strip():
+                eq_text = html.escape(alt.strip())
+            else:
+                eq_text = html.escape(
+                    re.sub(r"\s+", " ", _flatten_query_text(elem.get("b", ""))).strip()
+                )
+            parts.append(f"<p><code>{eq_text}</code></p>")
 
+        elif t == "fig":
+            body = elem.get("b", {})
+            if isinstance(body, dict) and body.get("func") == "image":
+                source = body.get("source", "")
+                alt_raw = body.get("alt")
+                alt = ""
+                if isinstance(alt_raw, str):
+                    alt = alt_raw.strip()
+                elif alt_raw is not None:
+                    alt = re.sub(r"\s+", " ", _flatten_query_text(alt_raw)).strip()
+                cap_node = elem.get("cap")
+                caption = ""
+                if isinstance(cap_node, dict):
+                    label = build_fig_label(cap_node, "image")
+                    body_text = flatten_doc_node_to_html(cap_node.get("body", ""))
+                    caption = re.sub(r"\s+", " ", f"{label} {body_text}").strip()
+                src_hash = hashlib.sha1(source.encode()).hexdigest()[:6]
+                img_src = html.escape(
+                    f"assets/image.{src_hash}.{asset_hash}.webp", quote=True
+                )
+                alt_attr = (
+                    f' alt="{html.escape(alt, quote=True)}"'
+                    if alt
+                    else ' role="presentation"'
+                )
+                img_tag = f'<img src="{img_src}"{alt_attr}>'
+                parts.append(
+                    f"<figure><p>{img_tag}</p>"
+                    f"<figcaption>{caption}</figcaption>"
+                    f"</figure>"
+                )
 
+        elif t == "fig-cap":
+            pending_table_cap = elem.get("cap")
 
-def _extract_inner_hidden_text(extracted_hidden: str) -> str:
-    if not extracted_hidden:
-        return ""
-    prefix = '<div class="sr-only">\n'
-    suffix = "\n</div>"
-    if extracted_hidden.startswith(prefix) and extracted_hidden.endswith(suffix):
-        return extracted_hidden[len(prefix) : -len(suffix)]
-    return extracted_hidden
+        elif t == "table":
+            table_node = elem.get("b")
+            cap = pending_table_cap
+            pending_table_cap = None
+            if isinstance(table_node, dict):
+                try:
+                    rows = _extract_typst_table_rows(table_node)
+                    table_html = _render_table_html(rows)
+                    if table_html:
+                        if cap is not None and isinstance(cap, dict):
+                            label = build_fig_label(cap, "table")
+                            body_text = flatten_doc_node_to_html(cap.get("body", ""))
+                            caption = re.sub(
+                                r"\s+", " ", f"{label} {body_text}"
+                            ).strip()
+                            parts.append(
+                                f"<figure>{table_html}"
+                                f"<figcaption>{caption}</figcaption>"
+                                f"</figure>"
+                            )
+                        else:
+                            parts.append(table_html)
+                except Exception:
+                    pass
+
+    # Flush any list still in progress at end of document
+    flush_list()
+
+    result = "\n".join(parts)
+
+    if nav_links:
+        nav_items = "".join(
+            f'<li><a href="{html.escape(href, quote=True)}" tabindex="-1">'
+            f"{html.escape(label)}</a></li>"
+            for href, label in nav_links
+        )
+        result += f'\n<nav aria-label="Post navigation"><ul>{nav_items}</ul></nav>'
+
+    return result
 
 
 def replace_hidden_block(
@@ -768,91 +385,37 @@ def replace_hidden_block(
 ) -> None:
     if not os.path.exists(index_path):
         return
-
     with open(index_path, "r", encoding="utf-8") as f:
         html_content = f.read()
-
     old_hidden = f'<div class="sr-only">\n{old_hidden_text}\n</div>'
     new_hidden = f'<div class="sr-only">\n{new_hidden_text}\n</div>'
     html_content = html_content.replace(old_hidden, new_hidden)
-
     with open(index_path, "w", encoding="utf-8") as f:
         f.write(html_content)
 
 
 def build_final_hidden_text(
-    post_pdf_path: str,
-    source_content: PostSourceContent,
+    driver_source_content: bytes,
+    query_root: str,
+    typst_inputs: Optional[Dict[str, str]],
+    post_title: str,
     post_subtitle: Optional[str],
     asset_hash: str,
     last_revision_date: Optional[str],
     last_revision_url: Optional[str],
     nav_links: Optional[List[Tuple[str, str]]] = None,
+    source_links: Optional[List[Tuple[str, str]]] = None,
 ) -> str:
-    _, extracted_hidden = extract_pdf_text(
-        post_pdf_path,
-        extract_title=False,
-        default_title="",
+    doc_elements = extract_doc_structure_from_content(
+        driver_source_content, query_root, typst_inputs
     )
-    inner_hidden = _extract_inner_hidden_text(extracted_hidden)
-    placeholder_html: List[Tuple[str, str]] = []
-    inner_hidden, heading_placeholders = _inject_heading_placeholders(
-        inner_hidden,
-        source_content.headings,
-        placeholder_html,
-    )
-    inner_hidden, table_placeholders = _inject_table_placeholders(
-        inner_hidden,
-        source_content.tables,
-        placeholder_html,
-    )
-    info_placeholders: Set[str] = set()
-    if source_content.info_blocks:
-        inner_hidden, info_placeholders = _inject_info_block_placeholders(
-            inner_hidden,
-            source_content.info_blocks,
-            placeholder_html,
-            source_links=source_content.links,
-        )
-    embedded_hidden_text, remaining_links = _embed_links_in_hidden_text(
-        inner_hidden,
-        source_content.links,
-        placeholder_html,
-    )
-    figure_placeholders: Set[str] = set()
-    if source_content.figures:
-        embedded_hidden_text, figure_placeholders = _inject_figure_placeholders(
-            embedded_hidden_text,
-            source_content.figures,
-            placeholder_html,
-            asset_hash,
-            source_links=source_content.links,
-        )
-    (
-        embedded_hidden_text,
-        remaining_inline_raws,
-        remaining_block_raws,
-        raw_placeholder_html,
-        block_placeholders,
-    ) = _embed_raws_in_hidden_text(
-        embedded_hidden_text,
-        source_content.raws,
-        placeholder_start_index=len(placeholder_html),
-    )
-    placeholder_html.extend(raw_placeholder_html)
-    paragraphized_hidden_text = _paragraphize_hidden_text(
-        embedded_hidden_text,
-        placeholder_html,
-        block_placeholders | heading_placeholders | table_placeholders | info_placeholders | figure_placeholders,
+    return build_hidden_text(
+        doc_elements,
+        post_title,
         post_subtitle,
+        asset_hash,
+        last_revision_date,
+        last_revision_url,
+        nav_links,
+        source_links,
     )
-    if nav_links:
-        nav_items = "".join(
-            f'<a href="{html.escape(href, quote=True)}" tabindex="-1">'
-            f"{html.escape(label)}</a>"
-            for href, label in nav_links
-        )
-        paragraphized_hidden_text += (
-            f'\n<nav aria-label="Post navigation">{nav_items}</nav>'
-        )
-    return paragraphized_hidden_text

@@ -2,13 +2,9 @@ import os
 import sys
 from typing import List, Set, Tuple
 
+from .post_entries import is_internal_post_entry
 from .revisions import find_latest_workspace_revision, parse_workspace_revision_entry
 from .submission_workspace import resolve_existing_post_metadata
-
-
-def _is_internal_post_entry(entry_name: str) -> bool:
-    return entry_name.startswith(".")
-
 
 def find_latest_revision_entry(
     posts_dir: str, workspace_name: str
@@ -24,7 +20,7 @@ def resolve_new_revision_name(date_dir: str, workspace_name: str) -> Tuple[int, 
 
     existing_dirs: List[int] = []
     for entry_name in os.listdir(date_dir):
-        if _is_internal_post_entry(entry_name):
+        if is_internal_post_entry(entry_name):
             continue
         try:
             existing_dirs.append(
@@ -76,7 +72,7 @@ def collect_published_workspaces(posts_dir: str) -> List[str]:
         if not os.path.isdir(date_dir):
             continue
         for entry_name in os.listdir(date_dir):
-            if _is_internal_post_entry(entry_name):
+            if is_internal_post_entry(entry_name):
                 continue
             post_dir = os.path.join(date_dir, entry_name)
             if not os.path.isdir(post_dir):

@@ -13,8 +13,9 @@ from .shared import (
     refresh_glyph_assets,
     resolve_base_url,
 )
+from .post_entries import is_internal_post_entry
 from .utils import (
-    TypstInputs,
+    build_typst_inputs,
     build_page_head_title,
     reset_directory,
     compile_and_build_html,
@@ -32,21 +33,16 @@ _REVISION_SUFFIX_PATTERN = re.compile(r"-(\d+)$")
 _SITE_TITLE = "Blog"
 
 
-def _is_internal_post_entry(post_dir_name: str) -> bool:
-    return post_dir_name.startswith(".")
-
-
 def _append_revision_suffix(post_dir_name: str, title: str) -> str:
     rev_match = _REVISION_SUFFIX_PATTERN.search(post_dir_name)
     if not rev_match:
         return title
     return f"{title} Rev {rev_match.group(1)}"
 
-
 def _collect_day_posts(date_dir: str, date_str: str) -> List[PostEntry]:
     day_posts: List[PostEntry] = []
     for post_dir_name in os.listdir(date_dir):
-        if _is_internal_post_entry(post_dir_name):
+        if is_internal_post_entry(post_dir_name):
             continue
         post_path = os.path.join(date_dir, post_dir_name)
         if not os.path.isdir(post_path):
@@ -123,10 +119,7 @@ def _build_sitemap_lines(base_url: str, posts_by_date: PostsByDate) -> List[str]
 
     for day_posts in posts_by_date.values():
         for post in day_posts:
-            rel_link = post["link"].lstrip("./")
-            rel_link_clean = rel_link
-            if rel_link_clean.endswith("index.html"):
-                rel_link_clean = rel_link_clean[:-10]
+            rel_link_clean = str(post["link"]).lstrip("./")
             sitemap_lines.append(
                 f"  <url><loc>{html.escape(base_url + '/' + rel_link_clean, quote=False)}</loc></url>"
             )
@@ -175,8 +168,6 @@ def _build_rss_lines(
 
     for post in all_posts:
         rel_link_clean = str(post["link"]).lstrip("./")
-        if rel_link_clean.endswith("index.html"):
-            rel_link_clean = rel_link_clean[:-10]
         post_url = f"{base_url}/{rel_link_clean}"
         item_description = str(post["description"])
         rss_lines.extend(
@@ -239,16 +230,9 @@ def update_content(args: Namespace) -> None:
 
     content_source_bytes = content_source.encode()
     template_path = os.path.join(base_dir, "index.template.html")
-    input_values_svg: Dict[str, str] = {
-        "with_driver": "true",
-        "export_format": "svg",
-        "back_href": "./index.html",
-    }
-    input_values_pdf: Dict[str, str] = {
-        "with_driver": "true",
-        "export_format": "pdf",
-        "back_href": "./index.html",
-    }
+    typst_inputs = build_typst_inputs(
+        shared_inputs={"back_href": "./index.html"},
+    )
 
     root_dir: str = args.root_dir
     os.makedirs(root_dir, exist_ok=True)
@@ -275,7 +259,7 @@ def update_content(args: Namespace) -> None:
         title_format="Blog Content Page {i}",
         default_title=page_title,
         description=page_description,
-        typst_inputs=TypstInputs(svg=input_values_svg, pdf=input_values_pdf),
+        typst_inputs=typst_inputs,
         extract_title_from_pdf=False,
         hidden_text_override=hidden_text,
         asset_context=asset_context,
@@ -291,7 +275,7 @@ def update_content(args: Namespace) -> None:
         if not os.path.isdir(date_dir):
             continue
         for post_dir_name in os.listdir(date_dir):
-            if _is_internal_post_entry(post_dir_name):
+            if is_internal_post_entry(post_dir_name):
                 continue
             post_path = os.path.join(date_dir, post_dir_name)
             if not os.path.isdir(post_path):

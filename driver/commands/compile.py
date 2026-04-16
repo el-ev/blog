@@ -12,27 +12,19 @@ from .compile_hidden_text import (
     replace_hidden_block,
 )
 from .shared import (
-    DriverAssetContext,
     build_driver_asset_context,
     build_public_page_url,
     resolve_base_url,
 )
 from .utils import (
     WORKSPACE_PUBLIC_DIR_NAME,
-    PostSourceContent,
-    TypstInputs,
-    build_raw_copy_assets,
     build_page_head_title,
+    build_typst_inputs,
     compile_and_build_html,
     extract_first_description_sentence,
     extract_declared_typst_string,
     extract_required_declared_typst_string,
-    extract_typst_headings_from_content,
-    extract_typst_figures_from_content,
-    extract_typst_info_blocks_from_content,
     extract_typst_links,
-    extract_typst_raws_from_content,
-    extract_typst_tables_from_content,
     find_latest_revision,
     make_temp_dir,
     minify_html_file,
@@ -72,28 +64,6 @@ def _copy_workspace_public_files(workspace_path: str, output_dir: str) -> int:
     return copied_count
 
 
-def _build_typst_inputs(
-    last_revision_date: Optional[str],
-    last_revision_url: Optional[str],
-    edited_date: Optional[str] = None,
-    publish_date: Optional[str] = None,
-) -> TypstInputs:
-    input_values_svg: Dict[str, str] = {"with_driver": "true", "export_format": "svg"}
-    input_values_pdf: Dict[str, str] = {"with_driver": "true", "export_format": "pdf"}
-    if publish_date:
-        input_values_svg["publish_date"] = publish_date
-        input_values_pdf["publish_date"] = publish_date
-    if edited_date:
-        input_values_svg["edited_date"] = edited_date
-        input_values_pdf["edited_date"] = edited_date
-    if last_revision_date and last_revision_url:
-        input_values_svg["last_revision_date"] = last_revision_date
-        input_values_svg["last_revision_url"] = last_revision_url
-        input_values_pdf["last_revision_date"] = last_revision_date
-        input_values_pdf["last_revision_url"] = last_revision_url
-    return TypstInputs(svg=input_values_svg, pdf=input_values_pdf)
-
-
 def _workspace_latest_modified_date(workspace_path: str) -> str:
     latest_mtime: Optional[float] = None
     for root, _, files in os.walk(workspace_path):
@@ -129,6 +99,8 @@ def _prepare_compile_sources(
         "// IMPORT_MAIN", f'#import "{main_typ_path}": *'
     )
     return driver_source.encode(), main_typ_abs_path, asset_hash
+
+
 def _replace_required_pattern(
     html_content: str,
     pattern: str,
@@ -208,62 +180,63 @@ def _stage_workspace_for_compile(
     return staged_path, temp_root
 
 
-def _compile_initial_post_html(
-    output_dir: str,
-    html_dest_dir: str,
-    base_dir: str,
-    driver_source_bytes: bytes,
-    asset_hash: str,
-    typst_inputs: TypstInputs,
-    raw_copy_html: str,
-    post_title: str,
-    post_subtitle: Optional[str],
-    asset_context: DriverAssetContext,
-    rss_feed_path: Optional[str],
-    og_url: Optional[str],
-    site_base_url: Optional[str],
-    enable_shared_glyph_extraction: bool,
-    image_source_dir: Optional[str] = None,
+def _resolve_workspace_path(
+    args: Namespace,
+    workspace_base: str,
+    workspace_name: str,
 ) -> str:
-    initial_hidden_text = ""
-    pdf_href = f"./assets/post.{asset_hash}.pdf"
-    compile_and_build_html(
-        source_bytes=driver_source_bytes,
-        output_dir=output_dir,
-        asset_hash=asset_hash,
-        file_prefix="post",
-        template_path=os.path.join(base_dir, "index.template.html"),
-        dest_dir=html_dest_dir,
-        title_format="Blog Page {i}",
-        default_title=post_title,
-        description=post_subtitle,
-        typst_inputs=typst_inputs,
-        extract_title_from_pdf=True,
-        hidden_text_override=initial_hidden_text,
-        raw_copy_html=raw_copy_html,
-        svg_href_rewrites={"post.pdf": pdf_href},
-        asset_dest_dir=output_dir,
-        asset_context=asset_context,
-        rss_feed_path=rss_feed_path,
-        og_type="article",
-        og_url=og_url,
-        site_base_url=site_base_url,
-        enable_shared_glyph_extraction=enable_shared_glyph_extraction,
-        image_source_dir=image_source_dir,
-    )
-    return initial_hidden_text
+    workspace_path = getattr(args, "workspace_path_override", None)
+    if workspace_path is not None:
+        return workspace_path
 
+    workspace_path = safe_join_child(workspace_base, workspace_name)
+    if not os.path.exists(workspace_path):
+        print(f"Workspace '{workspace_name}' does not exist.", file=sys.stderr)
+        sys.exit(1)
+    return workspace_path
+
+
+def _resolve_compile_output_dirs(
+    args: Namespace,
+    build_base: str,
+    workspace_name: str,
+) -> Tuple[str, str, str]:
+    output_dir_override = getattr(args, "output_dir_override", None)
+    html_output_dir_override = getattr(args, "html_output_dir_override", None)
+    public_output_dir_override = getattr(args, "public_output_dir_override", None)
+
+    if output_dir_override is None:
+        if html_output_dir_override is None:
+            os.makedirs(build_base, exist_ok=True)
+            html_output_dir = safe_join_child(build_base, workspace_name)
+        else:
+            html_output_dir = os.path.abspath(str(html_output_dir_override))
+        output_dir = safe_join_child(html_output_dir, "assets")
+        reset_directory(html_output_dir)
+    else:
+        output_dir = os.path.abspath(str(output_dir_override))
+        html_output_dir = (
+            os.path.abspath(str(html_output_dir_override))
+            if html_output_dir_override is not None
+            else os.path.dirname(output_dir)
+        )
+        reset_directory(output_dir)
+
+    public_output_dir = (
+        os.path.abspath(str(public_output_dir_override))
+        if public_output_dir_override is not None
+        else html_output_dir
+    )
+    os.makedirs(html_output_dir, exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
+    os.makedirs(public_output_dir, exist_ok=True)
+    return output_dir, html_output_dir, public_output_dir
 
 def run_compile(args: Namespace) -> None:
     workspace_base: str = args.workspace_base
     build_base: str = args.build_base
     workspace_name: str = args.name
-    workspace_path = getattr(args, "workspace_path_override", None)
-    if workspace_path is None:
-        workspace_path = safe_join_child(workspace_base, workspace_name)
-        if not os.path.exists(workspace_path):
-            print(f"Workspace '{workspace_name}' does not exist.", file=sys.stderr)
-            sys.exit(1)
+    workspace_path = _resolve_workspace_path(args, workspace_base, workspace_name)
     workspace_path, temp_workspace_root = _stage_workspace_for_compile(
         workspace_path,
         repo_root=os.getcwd(),
@@ -271,34 +244,9 @@ def run_compile(args: Namespace) -> None:
     )
 
     try:
-        output_dir_override = getattr(args, "output_dir_override", None)
-        html_output_dir_override = getattr(args, "html_output_dir_override", None)
-        public_output_dir_override = getattr(args, "public_output_dir_override", None)
-        if output_dir_override is None:
-            if html_output_dir_override is None:
-                os.makedirs(build_base, exist_ok=True)
-                html_output_dir = safe_join_child(build_base, workspace_name)
-            else:
-                html_output_dir = os.path.abspath(str(html_output_dir_override))
-            output_dir = safe_join_child(html_output_dir, "assets")
-            reset_directory(html_output_dir)
-        else:
-            output_dir = os.path.abspath(str(output_dir_override))
-            html_output_dir = (
-                os.path.abspath(str(html_output_dir_override))
-                if html_output_dir_override is not None
-                else os.path.dirname(output_dir)
-            )
-            reset_directory(output_dir)
-
-        public_output_dir = (
-            os.path.abspath(str(public_output_dir_override))
-            if public_output_dir_override is not None
-            else html_output_dir
+        output_dir, html_output_dir, public_output_dir = _resolve_compile_output_dirs(
+            args, build_base, workspace_name
         )
-        os.makedirs(html_output_dir, exist_ok=True)
-        os.makedirs(output_dir, exist_ok=True)
-        os.makedirs(public_output_dir, exist_ok=True)
 
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         asset_context = build_driver_asset_context(base_dir, args.root_dir)
@@ -325,56 +273,27 @@ def run_compile(args: Namespace) -> None:
             workspace_name,
             skip_latest=skip_latest,
         )
-        typst_inputs = _build_typst_inputs(
-            last_revision_date,
-            last_revision_url,
-            edited_date=edited_date,
-            publish_date=publish_date,
+        shared_typst_inputs: Dict[str, str] = {}
+        if publish_date:
+            shared_typst_inputs["publish_date"] = publish_date
+        if edited_date:
+            shared_typst_inputs["edited_date"] = edited_date
+        if last_revision_date and last_revision_url:
+            shared_typst_inputs["last_revision_date"] = last_revision_date
+            shared_typst_inputs["last_revision_url"] = last_revision_url
+        typst_inputs = build_typst_inputs(
+            shared_inputs=shared_typst_inputs or None,
         )
 
-        source_content = PostSourceContent(
-            links=extract_typst_links(
-                main_typ_abs_path,
-                query_root=os.getcwd(),
-            ),
-            raws=extract_typst_raws_from_content(
-                driver_source_bytes,
-                query_root=os.getcwd(),
-                inputs=typst_inputs.svg,
-            ),
-            headings=extract_typst_headings_from_content(
-                driver_source_bytes,
-                query_root=os.getcwd(),
-                inputs=typst_inputs.svg,
-            ),
-            tables=extract_typst_tables_from_content(
-                driver_source_bytes,
-                query_root=os.getcwd(),
-                inputs=typst_inputs.svg,
-            ),
-            figures=extract_typst_figures_from_content(
-                driver_source_bytes,
-                query_root=os.getcwd(),
-                inputs=typst_inputs.pdf,
-            ),
-            info_blocks=extract_typst_info_blocks_from_content(
-                driver_source_bytes,
-                query_root=os.getcwd(),
-                inputs=typst_inputs.pdf,
-            ),
-        )
-        raw_copy_html = build_raw_copy_assets(
-            source_content.raws,
-            asset_dir=output_dir,
+        source_links = extract_typst_links(
+            main_typ_abs_path,
+            query_root=os.getcwd(),
         )
 
         print("Compiling Typst project...", file=sys.stderr)
         enable_shared_glyph_extraction = bool(
             getattr(args, "enable_shared_glyph_extraction", True)
         )
-        rss_feed_path: Optional[str] = None
-        if output_dir_override is not None:
-            rss_feed_path = os.path.join(args.root_dir, "rss.xml")
         base_url = resolve_base_url(args)
         og_url = build_public_page_url(
             base_url=base_url,
@@ -382,28 +301,36 @@ def run_compile(args: Namespace) -> None:
             dest_dir=html_output_dir,
             html_filename="index.html",
         )
-        initial_hidden_text = _compile_initial_post_html(
+        initial_hidden_text = ""
+        pdf_href = f"./assets/post.{asset_hash}.pdf"
+        compile_and_build_html(
+            source_bytes=driver_source_bytes,
             output_dir=output_dir,
-            html_dest_dir=html_output_dir,
-            base_dir=base_dir,
-            driver_source_bytes=driver_source_bytes,
             asset_hash=asset_hash,
+            file_prefix="post",
+            template_path=os.path.join(base_dir, "index.template.html"),
+            dest_dir=html_output_dir,
+            title_format="Blog Page {i}",
+            default_title=post_title,
+            description=post_subtitle,
             typst_inputs=typst_inputs,
-            raw_copy_html=raw_copy_html,
-            post_title=post_title,
-            post_subtitle=post_subtitle,
+            extract_title_from_pdf=True,
+            hidden_text_override=initial_hidden_text,
+            svg_href_rewrites={"post.pdf": pdf_href},
+            asset_dest_dir=output_dir,
             asset_context=asset_context,
-            rss_feed_path=rss_feed_path,
+            og_type="article",
             og_url=og_url,
             site_base_url=base_url,
             enable_shared_glyph_extraction=enable_shared_glyph_extraction,
             image_source_dir=workspace_path,
         )
 
-        post_pdf_path = os.path.join(output_dir, f"post.{asset_hash}.pdf")
         final_hidden_text_override = build_final_hidden_text(
-            post_pdf_path,
-            source_content,
+            driver_source_bytes,
+            os.getcwd(),
+            typst_inputs.svg,
+            post_title,
             post_subtitle,
             asset_hash,
             last_revision_date,
@@ -413,6 +340,7 @@ def run_compile(args: Namespace) -> None:
                 ("meta.html", "Meta"),
                 (f"./assets/post.{asset_hash}.pdf", "PDF"),
             ],
+            source_links=source_links,
         )
 
         index_path = os.path.join(html_output_dir, "index.html")

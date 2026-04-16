@@ -44,12 +44,8 @@ _GLOBAL_GLYPH_MAP_VERSION = 1
 GLOBAL_GLYPH_ASSET_FILENAME = "glyphs.svg"
 GLOBAL_GLYPH_MAP_FILENAME = "glyph-map.json"
 _HTML_TAG_PATTERN = re.compile(r"<[^>]+>")
-_BLOCKQUOTE_PATTERN = re.compile(
-    r"<blockquote\b[^>]*>.*?</blockquote>",
-    flags=re.IGNORECASE | re.DOTALL,
-)
-_PARAGRAPH_WITH_ATTRS_PATTERN = re.compile(
-    r"<p\b([^>]*)>(.*?)</p>",
+_DESCRIPTION_BLOCK_PATTERN = re.compile(
+    r"<(blockquote|p|pre|figcaption|li)\b([^>]*)>(.*?)</\1>",
     flags=re.IGNORECASE | re.DOTALL,
 )
 _SENTENCE_PATTERN = re.compile(r".+?(?:[.!?](?=\s|$)|$)")
@@ -161,14 +157,26 @@ class TypstInputs:
     pdf: Dict[str, str]
 
 
-@dataclass(frozen=True)
-class PostSourceContent:
-    links: List[Tuple[str, str]]
-    raws: List[Tuple[str, bool]]
-    headings: List[Tuple[int, str]]
-    tables: List[Dict[str, Any]]
-    figures: Optional[List[Tuple[str, str, str]]] = None
-    info_blocks: Optional[List[str]] = None
+def build_typst_inputs(
+    shared_inputs: Optional[Dict[str, str]] = None,
+    svg_inputs: Optional[Dict[str, str]] = None,
+    pdf_inputs: Optional[Dict[str, str]] = None,
+) -> TypstInputs:
+    base_inputs = {"with_driver": "true"}
+    if shared_inputs:
+        base_inputs.update(shared_inputs)
+
+    svg = dict(base_inputs)
+    svg["export_format"] = "svg"
+    if svg_inputs:
+        svg.update(svg_inputs)
+
+    pdf = dict(base_inputs)
+    pdf["export_format"] = "pdf"
+    if pdf_inputs:
+        pdf.update(pdf_inputs)
+
+    return TypstInputs(svg=svg, pdf=pdf)
 
 
 def _append_svg_class(attrs: str, class_name: str) -> str:
@@ -287,29 +295,31 @@ def extract_first_description_sentence(
     skip_texts: Optional[List[str]] = None,
     max_length: int = 220,
 ) -> str:
-    searchable_fragment = _BLOCKQUOTE_PATTERN.sub("", html_fragment)
     normalized_skip_texts = {
         _normalize_description_comparison_text(text)
         for text in (skip_texts or [])
         if text and text.strip()
     }
-    for paragraph_match in _PARAGRAPH_WITH_ATTRS_PATTERN.finditer(searchable_fragment):
-        paragraph_attrs = paragraph_match.group(1) or ""
-        if re.search(r'\bclass\s*=\s*"[^"]*\bsubtitle\b', paragraph_attrs):
+    for block_match in _DESCRIPTION_BLOCK_PATTERN.finditer(html_fragment):
+        block_tag = (block_match.group(1) or "").lower()
+        block_attrs = block_match.group(2) or ""
+        if block_tag == "p" and re.search(
+            r'\bclass\s*=\s*"[^"]*\bsubtitle\b', block_attrs
+        ):
             continue
 
-        paragraph_text = _strip_html_text(paragraph_match.group(2))
-        if not paragraph_text:
+        block_text = _strip_html_text(block_match.group(3))
+        if not block_text:
             continue
-        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", paragraph_text):
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", block_text):
             continue
         if (
-            _normalize_description_comparison_text(paragraph_text)
+            _normalize_description_comparison_text(block_text)
             in normalized_skip_texts
         ):
             continue
 
-        sentence_match = _SENTENCE_PATTERN.search(paragraph_text)
+        sentence_match = _SENTENCE_PATTERN.search(block_text)
         if not sentence_match:
             continue
 
@@ -1017,55 +1027,6 @@ def extract_typst_links(
     return links
 
 
-def extract_typst_headings(
-    main_typ_path: str,
-    query_root: str,
-    inputs: Optional[Dict[str, str]] = None,
-) -> List[Tuple[int, str]]:
-    headings: List[Tuple[int, str]] = []
-    for item in _query_typst_json_nodes(
-        main_typ_path=main_typ_path,
-        query_root=query_root,
-        selector="heading",
-        query_label="headings",
-        parse_label="Typst heading query output",
-        inputs=inputs,
-    ):
-        level = item["level"]
-        if not isinstance(level, int):
-            raise RuntimeError(
-                "Invalid Typst heading query output: 'level' must be int."
-            )
-        text = re.sub(r"\s+", " ", _flatten_query_text(item["body"])).strip()
-        if not text:
-            continue
-        headings.append((level, text))
-
-    return headings
-
-
-def extract_typst_raws(
-    main_typ_path: str,
-    query_root: str,
-    inputs: Optional[Dict[str, str]] = None,
-) -> List[Tuple[str, bool]]:
-    raws: List[Tuple[str, bool]] = []
-    for item in _query_typst_json_nodes(
-        main_typ_path=main_typ_path,
-        query_root=query_root,
-        selector="raw",
-        query_label="raw elements",
-        parse_label="Typst raw query output",
-        inputs=inputs,
-    ):
-        text = item["text"]
-        if not isinstance(text, str):
-            raise RuntimeError("Invalid Typst raw query output: 'text' must be string.")
-        block = item["block"]
-        raws.append((text, bool(block)))
-    return raws
-
-
 def _extract_typst_table_rows(
     table_payload: Dict[str, Any],
 ) -> List[List[Dict[str, Any]]]:
@@ -1184,34 +1145,6 @@ def _extract_typst_table_rows(
     return rows
 
 
-def extract_typst_tables(
-    main_typ_path: str,
-    query_root: str,
-    inputs: Optional[Dict[str, str]] = None,
-) -> List[Dict[str, Any]]:
-    tables: List[Dict[str, Any]] = []
-    for item in _query_typst_json_nodes(
-        main_typ_path=main_typ_path,
-        query_root=query_root,
-        selector="table",
-        query_label="tables",
-        parse_label="Typst table query output",
-        inputs=inputs,
-    ):
-        if item.get("func") != "table":
-            raise RuntimeError(
-                "Invalid Typst table query output: node func must be 'table'."
-            )
-
-        tables.append(
-            {
-                "rows": _extract_typst_table_rows(item),
-            }
-        )
-
-    return tables
-
-
 _ExtractResult = TypeVar("_ExtractResult")
 
 
@@ -1252,167 +1185,83 @@ def _extract_typst_from_content(
             os.remove(temp_query_path)
 
 
-def extract_typst_raws_from_content(
+def extract_action_metadata(
+    main_typ_path: str,
+    query_root: str,
+    inputs: Optional[Dict[str, str]] = None,
+) -> Dict[str, Dict[str, str]]:
+    """Return {action_value: {label, role, tabindex}} from <driver-action> metadata."""
+    result: Dict[str, Dict[str, str]] = {}
+    for node in _query_typst_json_nodes(
+        main_typ_path=main_typ_path,
+        query_root=query_root,
+        selector="<driver-action>",
+        query_label="action metadata",
+        parse_label="Typst action metadata query output",
+        inputs=inputs,
+    ):
+        item = node.get("value")
+        if not isinstance(item, dict):
+            continue
+        action_val = item.get("a")
+        if not isinstance(action_val, str) or not action_val:
+            continue
+        result[action_val] = {
+            "label": str(item.get("label") or ""),
+            "role": str(item.get("role") or ""),
+            "tabindex": str(item.get("tabindex") or ""),
+        }
+    return result
+
+
+def extract_action_metadata_from_content(
     source_content: Union[str, bytes],
     query_root: str,
     inputs: Optional[Dict[str, str]] = None,
-) -> List[Tuple[str, bool]]:
+) -> Dict[str, Dict[str, str]]:
     return _extract_typst_from_content(
         source_content=source_content,
         query_root=query_root,
-        query_prefix=".raw-query-",
-        extractor=extract_typst_raws,
+        query_prefix=".action-query-",
+        extractor=extract_action_metadata,
         inputs=inputs,
     )
 
 
-def extract_typst_headings_from_content(
-    source_content: Union[str, bytes],
+def extract_doc_structure(
+    main_typ_path: str,
     query_root: str,
     inputs: Optional[Dict[str, str]] = None,
-) -> List[Tuple[int, str]]:
-    return _extract_typst_from_content(
-        source_content=source_content,
+) -> List[Dict[str, Any]]:
+    """Returns ordered list of metadata dicts from <driver-doc> query."""
+    nodes = _query_typst_json_nodes(
+        main_typ_path=main_typ_path,
         query_root=query_root,
-        query_prefix=".heading-query-",
-        extractor=extract_typst_headings,
+        selector="<driver-doc>",
+        query_label="document structure",
+        parse_label="Typst document structure query output",
         inputs=inputs,
     )
+    result: List[Dict[str, Any]] = []
+    for node in nodes:
+        value = node.get("value")
+        if isinstance(value, dict):
+            result.append(value)
+    return result
 
 
-def extract_typst_tables_from_content(
+def extract_doc_structure_from_content(
     source_content: Union[str, bytes],
     query_root: str,
     inputs: Optional[Dict[str, str]] = None,
 ) -> List[Dict[str, Any]]:
+    """Like extract_doc_structure but takes driver source bytes (pre-IMPORT_MAIN-substituted)."""
     return _extract_typst_from_content(
         source_content=source_content,
         query_root=query_root,
-        query_prefix=".table-query-",
-        extractor=extract_typst_tables,
+        query_prefix=".doc-query-",
+        extractor=extract_doc_structure,
         inputs=inputs,
-    )
-
-
-def extract_typst_figures(
-    main_typ_path: str,
-    query_root: str,
-    inputs: Optional[Dict[str, str]] = None,
-) -> List[Tuple[str, str, str]]:
-    """Returns (caption_text, image_source, image_alt) for each image figure."""
-    results: List[Tuple[str, str, str]] = []
-    for item in _query_typst_json_nodes(
-        main_typ_path=main_typ_path,
-        query_root=query_root,
-        selector="figure",
-        query_label="figures",
-        parse_label="Typst figure query output",
-        inputs=inputs,
-    ):
-        if item.get("func") != "figure":
-            continue
-        body = item.get("body")
-        if not isinstance(body, dict) or body.get("func") != "image":
-            continue
-        source = body.get("source", "")
-        if not source:
-            continue
-        alt_raw = body.get("alt")
-        alt = ""
-        if isinstance(alt_raw, str):
-            alt = alt_raw.strip()
-        elif alt_raw is not None:
-            alt = re.sub(r"\s+", " ", _flatten_query_text(alt_raw)).strip()
-        caption_node = item.get("caption")
-        if not caption_node:
-            continue
-        caption = re.sub(r"\s+", " ", _flatten_query_text(caption_node)).strip()
-        if caption:
-            results.append((caption, source, alt))
-    return results
-
-
-def extract_typst_figures_from_content(
-    source_content: Union[str, bytes],
-    query_root: str,
-    inputs: Optional[Dict[str, str]] = None,
-) -> List[Tuple[str, str, str]]:
-    return _extract_typst_from_content(
-        source_content=source_content,
-        query_root=query_root,
-        query_prefix=".figure-query-",
-        extractor=extract_typst_figures,
-        inputs=inputs,
-    )
-
-
-def extract_typst_info_blocks(
-    main_typ_path: str,
-    query_root: str,
-    inputs: Optional[Dict[str, str]] = None,
-) -> List[str]:
-    blocks: List[str] = []
-    for item in _query_typst_json_nodes(
-        main_typ_path=main_typ_path,
-        query_root=query_root,
-        selector="<info-block>",
-        query_label="info blocks",
-        parse_label="Typst info block query output",
-        inputs=inputs,
-    ):
-        body = item.get("body")
-        if body is None:
-            continue
-        text = re.sub(r"\s+", " ", _flatten_query_text(body)).strip()
-        if text:
-            blocks.append(text)
-    return blocks
-
-
-def extract_typst_info_blocks_from_content(
-    source_content: Union[str, bytes],
-    query_root: str,
-    inputs: Optional[Dict[str, str]] = None,
-) -> List[str]:
-    return _extract_typst_from_content(
-        source_content=source_content,
-        query_root=query_root,
-        query_prefix=".info-query-",
-        extractor=extract_typst_info_blocks,
-        inputs=inputs,
-    )
-
-
-def build_raw_copy_assets(
-    raw_entries: List[Tuple[str, bool]],
-    asset_dir: Optional[str] = None,
-) -> str:
-    if not raw_entries:
-        return ""
-
-    raw_texts: Dict[str, str] = {}
-    for text, _ in raw_entries:
-        raw_copy_id = make_raw_copy_id(text)
-        raw_texts[raw_copy_id] = text
-    json_payload = json.dumps(raw_texts, ensure_ascii=False).replace("</", "<\\/")
-
-    if not asset_dir:
-        return f'<script id="copy-data" type="application/json">{json_payload}</script>'
-
-    os.makedirs(asset_dir, exist_ok=True)
-    payload_bytes = json_payload.encode("utf-8")
-    payload_hash = hashlib.sha256(payload_bytes).hexdigest()[:_ASSET_HASH_LENGTH]
-    asset_name = f"copy.{payload_hash}.json"
-    asset_path = os.path.join(asset_dir, asset_name)
-
-    with open(asset_path, "w", encoding="utf-8") as f:
-        f.write(json_payload)
-
-    asset_href = build_local_asset_href(asset_path)
-
-    return (
-        '<script id="copy-data" type="application/json" '
-        f'data-src="{html.escape(asset_href, quote=True)}"></script>'
     )
 
 
@@ -2282,29 +2131,32 @@ def _parse_svg_action_href(href: Optional[str]) -> Tuple[Optional[str], Dict[str
     return _parse_action_payload(action_payload)
 
 
-def _infer_svg_anchor_role(href: Optional[str]) -> Optional[str]:
-    action_token, metadata = _parse_svg_action_href(href)
+def _infer_svg_anchor_role(
+    href: Optional[str],
+    action_metadata: Optional[Dict[str, Dict[str, str]]] = None,
+) -> Optional[str]:
+    action_token, _ = _parse_svg_action_href(href)
     if action_token is None:
         return None
-
-    explicit_role = metadata.get("role")
-    if explicit_role:
-        return explicit_role
-
+    meta = (action_metadata or {}).get(action_token, {})
+    role = meta.get("role", "")
+    if role:
+        return role
     if action_token == "theme" or action_token.startswith("copy:"):
         return "button"
     return None
 
 
-def _infer_svg_anchor_tabindex(href: Optional[str]) -> Optional[str]:
-    action_token, metadata = _parse_svg_action_href(href)
+def _infer_svg_anchor_tabindex(
+    href: Optional[str],
+    action_metadata: Optional[Dict[str, Dict[str, str]]] = None,
+) -> Optional[str]:
+    action_token, _ = _parse_svg_action_href(href)
     if action_token is None:
         return None
-
-    explicit_tabindex = metadata.get("tabindex")
-    if explicit_tabindex:
-        return explicit_tabindex
-    return None
+    meta = (action_metadata or {}).get(action_token, {})
+    tabindex = meta.get("tabindex", "")
+    return tabindex if tabindex else None
 
 
 _INDEX_HTML_SEGMENT_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -2510,6 +2362,7 @@ def _infer_svg_anchor_label(
     href: Optional[str],
     svg_path: Optional[str] = None,
     site_base_url: Optional[str] = None,
+    action_metadata: Optional[Dict[str, Dict[str, str]]] = None,
 ) -> Optional[str]:
     if href is None:
         return None
@@ -2518,11 +2371,12 @@ def _infer_svg_anchor_label(
     if not stripped_href:
         return None
 
-    action_token, metadata = _parse_svg_action_href(href)
+    action_token, _ = _parse_svg_action_href(href)
     if action_token is not None:
-        explicit_label = metadata.get("label")
-        if explicit_label:
-            return explicit_label
+        meta = (action_metadata or {}).get(action_token, {})
+        label = meta.get("label", "")
+        if label:
+            return label
         if action_token == "theme":
             return "Theme"
         if action_token.startswith("copy:"):
@@ -2567,6 +2421,7 @@ def _inject_svg_anchor_accessibility(
     svg_data: str,
     svg_path: Optional[str] = None,
     site_base_url: Optional[str] = None,
+    action_metadata: Optional[Dict[str, Dict[str, str]]] = None,
 ) -> str:
     def _rewrite_anchor(match: re.Match) -> str:
         attrs = match.group("attrs")
@@ -2576,12 +2431,13 @@ def _inject_svg_anchor_accessibility(
             href,
             svg_path=svg_path,
             site_base_url=site_base_url,
+            action_metadata=action_metadata,
         )
         if label is None:
             return match.group(0)
 
         rewritten_attrs = attrs
-        role = _infer_svg_anchor_role(href)
+        role = _infer_svg_anchor_role(href, action_metadata=action_metadata)
         has_role = (
             re.search(r"\s+role\s*=\s*['\"][^'\"]+['\"]", attrs, flags=re.IGNORECASE)
             is not None
@@ -2589,7 +2445,7 @@ def _inject_svg_anchor_accessibility(
         if role is not None and not has_role:
             rewritten_attrs += f' role="{html.escape(role, quote=True)}"'
 
-        tabindex = _infer_svg_anchor_tabindex(href)
+        tabindex = _infer_svg_anchor_tabindex(href, action_metadata=action_metadata)
         has_tabindex = (
             re.search(
                 r"\s+tabindex\s*=\s*['\"][^'\"]*['\"]",
@@ -2632,6 +2488,7 @@ def _inject_svg_anchor_accessibility(
 def _normalize_svg_href_file(
     svg_path: str,
     site_base_url: Optional[str] = None,
+    action_metadata: Optional[Dict[str, Dict[str, str]]] = None,
 ) -> None:
     if not os.path.isfile(svg_path):
         return
@@ -2645,6 +2502,7 @@ def _normalize_svg_href_file(
         normalized_svg_data,
         svg_path=svg_path,
         site_base_url=site_base_url,
+        action_metadata=action_metadata,
     )
     if normalized_svg_data == svg_data:
         return
@@ -2672,13 +2530,14 @@ def _optimize_svg_with_normalized_href(
     svg_path: str,
     preserve_ids: bool = False,
     site_base_url: Optional[str] = None,
+    action_metadata: Optional[Dict[str, Dict[str, str]]] = None,
 ) -> None:
     if not os.path.isfile(svg_path):
         return
 
     _prepare_anchor_hrefs_for_svgo_file(svg_path)
     _run_svgo(svg_path, preserve_ids=preserve_ids)
-    _normalize_svg_href_file(svg_path, site_base_url=site_base_url)
+    _normalize_svg_href_file(svg_path, site_base_url=site_base_url, action_metadata=action_metadata)
 
 
 def _convert_to_webp(src_bytes: bytes, dst_path: str) -> None:
@@ -2802,6 +2661,7 @@ def patch_svg_file(
     image_source_dir: Optional[str] = None,
     asset_hash: Optional[str] = None,
     image_asset_names: Optional[Dict[str, str]] = None,
+    action_metadata: Optional[Dict[str, Dict[str, str]]] = None,
 ) -> None:
     with open(src_path, "r", encoding="utf-8") as svg_file:
         svg_data = svg_file.read()
@@ -2861,6 +2721,7 @@ def patch_svg_file(
         svg_data,
         svg_path=dst_path,
         site_base_url=site_base_url,
+        action_metadata=action_metadata,
     )
     svg_data = _inject_svg_theme_classes(svg_data)
     svg_data = _inject_svg_theme_style(svg_data)
@@ -2919,7 +2780,6 @@ def build_html_from_svgs(
     default_title: str = "Blog Post",
     description: Optional[str] = None,
     hidden_text_override: Optional[str] = None,
-    raw_copy_html: str = "",
     top_bar_html: str = "",
     revision_html: str = "",
     svg_name_prefix: str = "page",
@@ -2933,6 +2793,7 @@ def build_html_from_svgs(
     image_source_dir: Optional[str] = None,
     asset_hash: Optional[str] = None,
     site_base_url: Optional[str] = None,
+    action_metadata: Optional[Dict[str, Dict[str, str]]] = None,
 ) -> str:
     with open(template_path, "r", encoding="utf-8") as f:
         template = f.read()
@@ -2980,6 +2841,7 @@ def build_html_from_svgs(
             image_source_dir=image_source_dir,
             asset_hash=asset_hash,
             image_asset_names=image_asset_names,
+            action_metadata=action_metadata,
         )
         patched_svg_paths.append(dst_path)
 
@@ -3007,6 +2869,7 @@ def build_html_from_svgs(
         _optimize_svg_with_normalized_href(
             svg_path,
             site_base_url=site_base_url,
+            action_metadata=action_metadata,
         )
     if enable_shared_glyph_extraction and glyph_asset_path:
         _optimize_svg_with_normalized_href(
@@ -3061,7 +2924,6 @@ def build_html_from_svgs(
     )
     index_content = index_content.replace("{{TITLE}}", html.escape(title))
     index_content = index_content.replace("{{TEXT}}", hidden_text)
-    index_content = index_content.replace("{{RAW_COPY}}", raw_copy_html)
     index_content = index_content.replace("{{TOPBAR}}", top_bar_html)
     index_content = index_content.replace("{{REVISION}}", revision_html)
 
@@ -3083,7 +2945,7 @@ def build_html_from_svgs(
         )
         rss_feed_link = (
             '<link rel="alternate" type="application/rss+xml" '
-            f'title="RSS Feed" href="{html.escape(rss_feed_href)}">'
+            f'title="RSS" href="{html.escape(rss_feed_href)}">'
         )
     index_content = index_content.replace("{{RSS_FEED_LINK}}", rss_feed_link)
 
@@ -3131,7 +2993,6 @@ def compile_and_build_html(
     typst_inputs: Optional["TypstInputs"] = None,
     extract_title_from_pdf: bool = False,
     hidden_text_override: Optional[str] = None,
-    raw_copy_html: str = "",
     svg_href_rewrites: Optional[Dict[str, str]] = None,
     svg_name_prefix: str = "page",
     html_filename: str = "index.html",
@@ -3174,6 +3035,12 @@ def compile_and_build_html(
         [f for f in os.listdir(output_dir) if _is_generated_svg(f, svg_name_prefix)]
     )
 
+    action_meta = extract_action_metadata_from_content(
+        source_bytes,
+        query_root=os.getcwd(),
+        inputs=resolved_inputs_svg,
+    )
+
     return build_html_from_svgs(
         template_path=template_path,
         output_dir=output_dir,
@@ -3186,7 +3053,6 @@ def compile_and_build_html(
         default_title=default_title,
         description=description,
         hidden_text_override=hidden_text_override,
-        raw_copy_html=raw_copy_html,
         svg_name_prefix=svg_name_prefix,
         html_filename=html_filename,
         asset_dest_dir=asset_dest_dir,
@@ -3199,4 +3065,5 @@ def compile_and_build_html(
         image_source_dir=image_source_dir,
         asset_hash=asset_hash,
         site_base_url=site_base_url,
+        action_metadata=action_meta,
     )

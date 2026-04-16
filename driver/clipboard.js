@@ -1,10 +1,4 @@
 (() => {
-  const rawCopyNode = document.getElementById('copy-data');
-  if (!rawCopyNode) {
-    return;
-  }
-
-  let rawCopyTexts = {};
   let toast = null;
   let toastTimer = 0;
   let announcer = null;
@@ -66,56 +60,12 @@
   };
 
   window.copyCode = async (uid) => {
-    const text = rawCopyTexts[uid];
-    if (typeof text !== 'string' || !text.length) {
+    const node = document.getElementById('raw-' + uid);
+    const text = node?.textContent || '';
+    if (!text) {
       return;
     }
-    const copied = text.length > 0 && await copyText(text);
+    const copied = await copyText(text);
     showToast(copied ? 'Copied' : 'Copy failed');
   };
-
-  const parseRawCopyPayload = (payload) => {
-    try {
-      const data = JSON.parse(payload);
-      if (!data || typeof data !== 'object' || Array.isArray(data)) {
-        return {};
-      }
-      const normalized = {};
-      for (const [key, value] of Object.entries(data)) {
-        if (typeof value === 'string') {
-          normalized[key] = value;
-        }
-      }
-      return normalized;
-    } catch {
-      return {};
-    }
-  };
-
-  const inlinePayload = rawCopyNode.textContent?.trim() || '';
-  if (inlinePayload) {
-    rawCopyTexts = parseRawCopyPayload(inlinePayload);
-    if (Object.keys(rawCopyTexts).length) {
-      return;
-    }
-  }
-
-  const rawCopySrc = rawCopyNode.getAttribute('data-src');
-  if (!rawCopySrc) {
-    return;
-  }
-
-  const hydrateRawCopyData = async () => {
-    try {
-      const response = await fetch(rawCopySrc, {cache: 'force-cache'});
-      if (!response.ok) {
-        return;
-      }
-      rawCopyTexts = parseRawCopyPayload(await response.text());
-    } catch {
-      // Keep the no-op copy handler when payload fetch fails.
-    }
-  };
-
-  void hydrateRawCopyData();
 })();

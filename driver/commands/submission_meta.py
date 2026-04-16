@@ -7,11 +7,10 @@ from typing import Dict, List, Optional, Tuple
 
 from .utils import (
     DriverAssetContext,
-    TypstInputs,
-    build_raw_copy_assets,
+    build_typst_inputs,
     compile_and_build_html,
-    extract_typst_raws_from_content,
     hash_text_with_sources,
+    make_raw_copy_id,
     make_temp_dir,
 )
 
@@ -115,7 +114,11 @@ def _build_meta_hidden_text(
 ) -> str:
     lines: List[str] = ["<h1>Meta</h1>", "<ul>"]
     for key, value in meta_fields.items():
-        lines.append(f"<li>{html.escape(key)}: <code>{html.escape(value)}</code></li>")
+        copy_id = make_raw_copy_id(value)
+        lines.append(
+            f"<li>{html.escape(key)}: "
+            f'<code id="raw-{copy_id}">{html.escape(value)}</code></li>'
+        )
     lines.append("</ul>")
     lines.append("<h2>Source Files</h2>")
     lines.append("<ul>")
@@ -140,7 +143,6 @@ def compile_meta_page(
     meta_fields: Dict[str, str],
     workspace_files: List[str],
     asset_context: DriverAssetContext,
-    rss_feed_path: Optional[str] = None,
     og_url: Optional[str] = None,
     site_base_url: Optional[str] = None,
 ) -> None:
@@ -160,26 +162,7 @@ def compile_meta_page(
         [template_typ_path],
     )
 
-    input_values_svg: Dict[str, str] = {
-        "with_driver": "true",
-        "export_format": "svg",
-        "back_href": "index.html",
-    }
-    input_values_pdf: Dict[str, str] = {
-        "with_driver": "true",
-        "export_format": "pdf",
-        "back_href": "index.html",
-    }
-
-    meta_raws = extract_typst_raws_from_content(
-        meta_source,
-        query_root=os.getcwd(),
-        inputs=input_values_svg,
-    )
-    raw_copy_html = build_raw_copy_assets(
-        meta_raws,
-        asset_dir=asset_dir,
-    )
+    typst_inputs = build_typst_inputs(shared_inputs={"back_href": "index.html"})
 
     meta_output_dir = make_temp_dir(build_base, prefix=".meta-build-")
     try:
@@ -193,15 +176,13 @@ def compile_meta_page(
             title_format="Meta Page {i}",
             default_title=f"{post_title} - Meta",
             description=f"Metadata for {post_title}",
-            typst_inputs=TypstInputs(svg=input_values_svg, pdf=input_values_pdf),
+            typst_inputs=typst_inputs,
             extract_title_from_pdf=False,
             hidden_text_override=meta_hidden_text,
-            raw_copy_html=raw_copy_html,
             svg_name_prefix="meta-page",
             html_filename="meta.html",
             asset_dest_dir=asset_dir,
             asset_context=asset_context,
-            rss_feed_path=rss_feed_path,
             og_type="article",
             og_url=og_url,
             site_base_url=site_base_url,
