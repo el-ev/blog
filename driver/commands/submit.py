@@ -21,6 +21,8 @@ from .submission_flow import (
     resolve_submission_destination,
 )
 from .submission_meta import (
+    MetaFieldsRequest,
+    MetaPageRequest,
     build_meta_fields,
     compile_meta_page,
     extract_post_pdf_name,
@@ -131,16 +133,18 @@ def _submit_to_destination(
             meta_generated_at = existing_post_json.get("generated_at")
 
         meta_fields = build_meta_fields(
-            workspace_name=workspace_name,
-            date_str=date_str,
-            target_rev=target_rev,
-            dest_dir_name=dest_dir_name,
-            post_title=post_title,
-            post_subtitle=post_subtitle,
-            pdf_name=pdf_name,
-            post_source_hash=post_asset_hash,
-            workspace_files=workspace_files,
-            generated_at=meta_generated_at,
+            MetaFieldsRequest(
+                workspace_name=workspace_name,
+                date_str=date_str,
+                target_rev=target_rev,
+                dest_dir_name=dest_dir_name,
+                post_title=post_title,
+                post_subtitle=post_subtitle,
+                pdf_name=pdf_name,
+                post_source_hash=post_asset_hash,
+                workspace_files=workspace_files,
+                generated_at=meta_generated_at,
+            )
         )
         base_url = resolve_base_url(args)
         meta_og_url = build_public_page_url(
@@ -150,16 +154,18 @@ def _submit_to_destination(
             html_filename="meta.html",
         )
         compile_meta_page(
-            build_base=args.build_base,
-            base_dir=base_dir,
-            dest_dir=dest_dir,
-            asset_dir=dest_assets_dir,
-            post_title=post_title,
-            meta_fields=meta_fields,
-            workspace_files=workspace_files,
-            asset_context=asset_context,
-            og_url=meta_og_url,
-            site_base_url=base_url,
+            MetaPageRequest(
+                build_base=args.build_base,
+                base_dir=base_dir,
+                dest_dir=dest_dir,
+                asset_dir=dest_assets_dir,
+                post_title=post_title,
+                meta_fields=meta_fields,
+                workspace_files=workspace_files,
+                asset_context=asset_context,
+                og_url=meta_og_url,
+                site_base_url=base_url,
+            )
         )
 
         index_html_path = os.path.join(dest_dir, "index.html")

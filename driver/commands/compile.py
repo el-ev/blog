@@ -4,8 +4,9 @@ import re
 import shutil
 import sys
 from argparse import Namespace
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional
 
 from .compile_hidden_text import (
     build_final_hidden_text,
@@ -17,6 +18,8 @@ from .shared import (
     resolve_base_url,
 )
 from .utils import (
+    CompileBuildRequest,
+    HtmlBuildConfig,
     WORKSPACE_PUBLIC_DIR_NAME,
     build_page_head_title,
     build_typst_inputs,
@@ -34,6 +37,26 @@ from .utils import (
 )
 
 _SITE_TITLE = "Blog"
+
+
+@dataclass(frozen=True)
+class PreparedCompileSources:
+    driver_source_bytes: bytes
+    main_typ_path: str
+    asset_hash: str
+
+
+@dataclass(frozen=True)
+class StagedWorkspace:
+    path: str
+    temp_root: Optional[str]
+
+
+@dataclass(frozen=True)
+class CompileOutputDirs:
+    asset_output_dir: str
+    html_output_dir: str
+    public_output_dir: str
 
 
 def _copy_workspace_public_files(workspace_path: str, output_dir: str) -> int:
@@ -83,7 +106,7 @@ def _workspace_latest_modified_date(workspace_path: str) -> str:
 
 def _prepare_compile_sources(
     base_dir: str, workspace_path: str
-) -> Tuple[bytes, str, str]:
+) -> PreparedCompileSources:
     driver_typ_path = os.path.join(base_dir, "driver.typ")
     template_typ_path = os.path.join(base_dir, "template.typ")
 
@@ -98,7 +121,11 @@ def _prepare_compile_sources(
     driver_source = driver_source.replace(
         "// IMPORT_MAIN", f'#import "{main_typ_path}": *'
     )
-    return driver_source.encode(), main_typ_abs_path, asset_hash
+    return PreparedCompileSources(
+        driver_source_bytes=driver_source.encode(),
+        main_typ_path=main_typ_abs_path,
+        asset_hash=asset_hash,
+    )
 
 
 def _replace_required_pattern(
@@ -165,19 +192,19 @@ def _finalize_article_metadata(
 
 def _stage_workspace_for_compile(
     workspace_path: str, repo_root: str, build_base: str
-) -> Tuple[str, str]:
+) -> StagedWorkspace:
     workspace_abs = os.path.abspath(workspace_path)
     repo_abs = os.path.abspath(repo_root)
     try:
         if os.path.commonpath([repo_abs, workspace_abs]) == repo_abs:
-            return workspace_abs, ""
+            return StagedWorkspace(path=workspace_abs, temp_root=None)
     except ValueError:
         pass
 
     temp_root = make_temp_dir(build_base, prefix=".compile-workspace-")
     staged_path = os.path.join(temp_root, os.path.basename(workspace_abs))
     shutil.copytree(workspace_abs, staged_path)
-    return staged_path, temp_root
+    return StagedWorkspace(path=staged_path, temp_root=temp_root)
 
 
 def _resolve_workspace_path(
@@ -200,7 +227,7 @@ def _resolve_compile_output_dirs(
     args: Namespace,
     build_base: str,
     workspace_name: str,
-) -> Tuple[str, str, str]:
+) -> CompileOutputDirs:
     output_dir_override = getattr(args, "output_dir_override", None)
     html_output_dir_override = getattr(args, "html_output_dir_override", None)
     public_output_dir_override = getattr(args, "public_output_dir_override", None)
@@ -230,35 +257,43 @@ def _resolve_compile_output_dirs(
     os.makedirs(html_output_dir, exist_ok=True)
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs(public_output_dir, exist_ok=True)
-    return output_dir, html_output_dir, public_output_dir
+    return CompileOutputDirs(
+        asset_output_dir=output_dir,
+        html_output_dir=html_output_dir,
+        public_output_dir=public_output_dir,
+    )
+
 
 def run_compile(args: Namespace) -> None:
     workspace_base: str = args.workspace_base
     build_base: str = args.build_base
     workspace_name: str = args.name
     workspace_path = _resolve_workspace_path(args, workspace_base, workspace_name)
-    workspace_path, temp_workspace_root = _stage_workspace_for_compile(
+    staged_workspace = _stage_workspace_for_compile(
         workspace_path,
         repo_root=os.getcwd(),
         build_base=build_base,
     )
+    workspace_path = staged_workspace.path
 
     try:
-        output_dir, html_output_dir, public_output_dir = _resolve_compile_output_dirs(
+        output_dirs = _resolve_compile_output_dirs(
             args, build_base, workspace_name
         )
 
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         asset_context = build_driver_asset_context(base_dir, args.root_dir)
-        driver_source_bytes, main_typ_abs_path, asset_hash = _prepare_compile_sources(
+        compile_sources = _prepare_compile_sources(
             base_dir,
             workspace_path,
         )
         post_title = extract_required_declared_typst_string(
-            main_typ_abs_path,
+            compile_sources.main_typ_path,
             "title",
         )
-        post_subtitle = extract_declared_typst_string(main_typ_abs_path, "subtitle")
+        post_subtitle = extract_declared_typst_string(
+            compile_sources.main_typ_path, "subtitle"
+        )
 
         posts_dir = os.path.join(args.root_dir, "posts")
         skip_latest = getattr(args, "amend", False)
@@ -286,7 +321,7 @@ def run_compile(args: Namespace) -> None:
         )
 
         source_links = extract_typst_links(
-            main_typ_abs_path,
+            compile_sources.main_typ_path,
             query_root=os.getcwd(),
         )
 
@@ -298,52 +333,56 @@ def run_compile(args: Namespace) -> None:
         og_url = build_public_page_url(
             base_url=base_url,
             root_dir=args.root_dir,
-            dest_dir=html_output_dir,
+            dest_dir=output_dirs.html_output_dir,
             html_filename="index.html",
         )
         initial_hidden_text = ""
-        pdf_href = f"./assets/post.{asset_hash}.pdf"
+        pdf_href = f"./assets/post.{compile_sources.asset_hash}.pdf"
         compile_and_build_html(
-            source_bytes=driver_source_bytes,
-            output_dir=output_dir,
-            asset_hash=asset_hash,
-            file_prefix="post",
-            template_path=os.path.join(base_dir, "index.template.html"),
-            dest_dir=html_output_dir,
-            title_format="Blog Page {i}",
-            default_title=post_title,
-            description=post_subtitle,
-            typst_inputs=typst_inputs,
-            extract_title_from_pdf=True,
-            hidden_text_override=initial_hidden_text,
-            svg_href_rewrites={"post.pdf": pdf_href},
-            asset_dest_dir=output_dir,
-            asset_context=asset_context,
-            og_type="article",
-            og_url=og_url,
-            site_base_url=base_url,
-            enable_shared_glyph_extraction=enable_shared_glyph_extraction,
-            image_source_dir=workspace_path,
+            CompileBuildRequest(
+                source_bytes=compile_sources.driver_source_bytes,
+                output_dir=output_dirs.asset_output_dir,
+                asset_hash=compile_sources.asset_hash,
+                file_prefix="post",
+                typst_inputs=typst_inputs,
+                html=HtmlBuildConfig(
+                    template_path=os.path.join(base_dir, "index.template.html"),
+                    dest_dir=output_dirs.html_output_dir,
+                    title_format="Blog Page {i}",
+                    default_title=post_title,
+                    asset_context=asset_context,
+                    description=post_subtitle,
+                    hidden_text_override=initial_hidden_text,
+                    extract_title_from_pdf=True,
+                    svg_href_rewrites={"post.pdf": pdf_href},
+                    asset_dest_dir=output_dirs.asset_output_dir,
+                    og_type="article",
+                    og_url=og_url,
+                    enable_shared_glyph_extraction=enable_shared_glyph_extraction,
+                    image_source_dir=workspace_path,
+                    site_base_url=base_url,
+                ),
+            )
         )
 
         final_hidden_text_override = build_final_hidden_text(
-            driver_source_bytes,
+            compile_sources.driver_source_bytes,
             os.getcwd(),
             typst_inputs.svg,
             post_title,
             post_subtitle,
-            asset_hash,
+            compile_sources.asset_hash,
             last_revision_date,
             last_revision_url,
             nav_links=[
                 ("../../../index.html", "Contents"),
                 ("meta.html", "Meta"),
-                (f"./assets/post.{asset_hash}.pdf", "PDF"),
+                (f"./assets/post.{compile_sources.asset_hash}.pdf", "PDF"),
             ],
             source_links=source_links,
         )
 
-        index_path = os.path.join(html_output_dir, "index.html")
+        index_path = os.path.join(output_dirs.html_output_dir, "index.html")
         replace_hidden_block(
             index_path=index_path,
             old_hidden_text=initial_hidden_text,
@@ -357,12 +396,14 @@ def run_compile(args: Namespace) -> None:
         )
         minify_html_file(index_path)
 
-        copied_files = _copy_workspace_public_files(workspace_path, public_output_dir)
+        copied_files = _copy_workspace_public_files(
+            workspace_path, output_dirs.public_output_dir
+        )
         if copied_files:
             print(
                 f"Copied {copied_files} file(s) from '{WORKSPACE_PUBLIC_DIR_NAME}/'.",
                 file=sys.stderr,
             )
     finally:
-        if temp_workspace_root:
-            shutil.rmtree(temp_workspace_root, ignore_errors=True)
+        if staged_workspace.temp_root:
+            shutil.rmtree(staged_workspace.temp_root, ignore_errors=True)

@@ -157,6 +157,41 @@ class TypstInputs:
     pdf: Dict[str, str]
 
 
+@dataclass(frozen=True)
+class HtmlBuildConfig:
+    template_path: str
+    dest_dir: str
+    title_format: str
+    default_title: str
+    asset_context: DriverAssetContext
+    description: Optional[str] = None
+    hidden_text_override: Optional[str] = None
+    top_bar_html: str = ""
+    revision_html: str = ""
+    extract_title_from_pdf: bool = False
+    svg_href_rewrites: Optional[Dict[str, str]] = None
+    svg_name_prefix: str = "page"
+    html_filename: str = "index.html"
+    asset_dest_dir: Optional[str] = None
+    rss_feed_path: Optional[str] = None
+    og_type: str = "website"
+    og_url: Optional[str] = None
+    glyph_scope_key: Optional[str] = None
+    enable_shared_glyph_extraction: bool = True
+    image_source_dir: Optional[str] = None
+    site_base_url: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class CompileBuildRequest:
+    source_bytes: bytes
+    output_dir: str
+    asset_hash: str
+    file_prefix: str
+    html: HtmlBuildConfig
+    typst_inputs: Optional[TypstInputs] = None
+
+
 def build_typst_inputs(
     shared_inputs: Optional[Dict[str, str]] = None,
     svg_inputs: Optional[Dict[str, str]] = None,
@@ -2768,62 +2803,44 @@ def _build_open_graph_metadata(
 
 
 def build_html_from_svgs(
-    template_path: str,
+    config: HtmlBuildConfig,
     output_dir: str,
-    dest_dir: str,
     page_count: int,
-    title_format: str,
-    asset_context: "DriverAssetContext",
     pdf_path: Optional[str] = None,
-    svg_href_rewrites: Optional[Dict[str, str]] = None,
-    extract_title_from_pdf: bool = False,
-    default_title: str = "Blog Post",
-    description: Optional[str] = None,
-    hidden_text_override: Optional[str] = None,
-    top_bar_html: str = "",
-    revision_html: str = "",
-    svg_name_prefix: str = "page",
-    html_filename: str = "index.html",
-    asset_dest_dir: Optional[str] = None,
-    rss_feed_path: Optional[str] = None,
-    og_type: str = "website",
-    og_url: Optional[str] = None,
-    glyph_scope_key: Optional[str] = None,
-    enable_shared_glyph_extraction: bool = True,
-    image_source_dir: Optional[str] = None,
     asset_hash: Optional[str] = None,
-    site_base_url: Optional[str] = None,
     action_metadata: Optional[Dict[str, Dict[str, str]]] = None,
 ) -> str:
-    with open(template_path, "r", encoding="utf-8") as f:
+    with open(config.template_path, "r", encoding="utf-8") as f:
         template = f.read()
 
-    index_path = os.path.join(dest_dir, html_filename)
+    index_path = os.path.join(config.dest_dir, config.html_filename)
     html_dir = os.path.dirname(index_path)
-    page_asset_dir = asset_dest_dir or dest_dir
+    page_asset_dir = config.asset_dest_dir or config.dest_dir
     page_links_list: List[str] = []
     page_render_items: List[Tuple[str, str]] = []
     patched_svg_paths: List[str] = []
-    os.makedirs(dest_dir, exist_ok=True)
+    os.makedirs(config.dest_dir, exist_ok=True)
     os.makedirs(page_asset_dir, exist_ok=True)
     image_asset_names: Dict[str, str] = {}
 
     svg_files = sorted(
-        f for f in os.listdir(output_dir) if _is_generated_svg(f, svg_name_prefix)
+        f
+        for f in os.listdir(output_dir)
+        if _is_generated_svg(f, config.svg_name_prefix)
     )
     if page_count:
         svg_files = svg_files[:page_count]
 
     current_svg_set = set(svg_files)
     cleanup_dirs = [page_asset_dir]
-    if os.path.abspath(page_asset_dir) != os.path.abspath(dest_dir):
-        cleanup_dirs.append(dest_dir)
+    if os.path.abspath(page_asset_dir) != os.path.abspath(config.dest_dir):
+        cleanup_dirs.append(config.dest_dir)
     for cleanup_dir in cleanup_dirs:
         if not os.path.isdir(cleanup_dir):
             continue
         for filename in os.listdir(cleanup_dir):
             if (
-                _is_generated_svg(filename, svg_name_prefix)
+                _is_generated_svg(filename, config.svg_name_prefix)
                 and filename not in current_svg_set
             ):
                 os.remove(os.path.join(cleanup_dir, filename))
@@ -2835,47 +2852,47 @@ def build_html_from_svgs(
         patch_svg_file(
             src_path,
             dst_path,
-            svg_href_rewrites,
+            config.svg_href_rewrites,
             href_base_dir=html_dir,
-            site_base_url=site_base_url,
-            image_source_dir=image_source_dir,
+            site_base_url=config.site_base_url,
+            image_source_dir=config.image_source_dir,
             asset_hash=asset_hash,
             image_asset_names=image_asset_names,
             action_metadata=action_metadata,
         )
         patched_svg_paths.append(dst_path)
 
-        page_title = title_format.replace("{i}", str(i))
+        page_title = config.title_format.replace("{i}", str(i))
         page_render_items.append((dst_path, page_title))
 
-    if image_source_dir is not None and asset_hash is not None:
+    if config.image_source_dir is not None and asset_hash is not None:
         _remove_stale_generated_driver_image_assets(
             page_asset_dir,
             keep_filenames=set(image_asset_names.values()),
         )
 
     glyph_asset_path: Optional[str] = None
-    if enable_shared_glyph_extraction:
-        glyph_scope = glyph_scope_key or svg_name_prefix
+    if config.enable_shared_glyph_extraction:
+        glyph_scope = config.glyph_scope_key or config.svg_name_prefix
         glyph_asset_path = _extract_and_rewrite_shared_svg_glyphs(
             patched_svg_paths,
             dest_dir=page_asset_dir,
             glyph_scope_key=glyph_scope,
-            global_glyph_asset_path=asset_context.global_glyph_asset_path,
-            global_glyph_map_path=asset_context.global_glyph_map_path,
+            global_glyph_asset_path=config.asset_context.global_glyph_asset_path,
+            global_glyph_map_path=config.asset_context.global_glyph_map_path,
         )
 
     for svg_path in patched_svg_paths:
         _optimize_svg_with_normalized_href(
             svg_path,
-            site_base_url=site_base_url,
+            site_base_url=config.site_base_url,
             action_metadata=action_metadata,
         )
-    if enable_shared_glyph_extraction and glyph_asset_path:
+    if config.enable_shared_glyph_extraction and glyph_asset_path:
         _optimize_svg_with_normalized_href(
             glyph_asset_path,
             preserve_ids=True,
-            site_base_url=site_base_url,
+            site_base_url=config.site_base_url,
         )
 
     for svg_path, page_title in page_render_items:
@@ -2889,27 +2906,35 @@ def build_html_from_svgs(
     index_content = template.replace("{{PAGES}}", page_links)
     index_content = index_content.replace(
         "{{INLINE_STYLE}}",
-        f"<style>{asset_context.web_assets.inline_style}</style>" if asset_context.web_assets.inline_style else "",
+        (
+            f"<style>{config.asset_context.web_assets.inline_style}</style>"
+            if config.asset_context.web_assets.inline_style
+            else ""
+        ),
     )
     index_content = index_content.replace(
         "{{INLINE_SCRIPT}}",
-        f"<script>{asset_context.web_assets.inline_script}</script>" if asset_context.web_assets.inline_script else "",
+        (
+            f"<script>{config.asset_context.web_assets.inline_script}</script>"
+            if config.asset_context.web_assets.inline_script
+            else ""
+        ),
     )
 
-    title = default_title
+    title = config.default_title
     hidden_text = ""
 
     if pdf_path:
         title, hidden_text = extract_pdf_text(
             pdf_path,
-            extract_title=extract_title_from_pdf,
-            default_title=default_title,
+            extract_title=config.extract_title_from_pdf,
+            default_title=config.default_title,
         )
 
-    if hidden_text_override is not None:
-        hidden_text = f'<div class="sr-only">\n{hidden_text_override}\n</div>'
+    if config.hidden_text_override is not None:
+        hidden_text = f'<div class="sr-only">\n{config.hidden_text_override}\n</div>'
 
-    meta_description = description if description else title
+    meta_description = config.description if config.description else title
     index_content = index_content.replace(
         "{{DESCRIPTION}}", html.escape(meta_description)
     )
@@ -2918,18 +2943,22 @@ def build_html_from_svgs(
         _build_open_graph_metadata(
             title=title,
             description=meta_description,
-            og_type=og_type,
-            og_url=og_url,
+            og_type=config.og_type,
+            og_url=config.og_url,
         ),
     )
     index_content = index_content.replace("{{TITLE}}", html.escape(title))
     index_content = index_content.replace("{{TEXT}}", hidden_text)
-    index_content = index_content.replace("{{TOPBAR}}", top_bar_html)
-    index_content = index_content.replace("{{REVISION}}", revision_html)
+    index_content = index_content.replace("{{TOPBAR}}", config.top_bar_html)
+    index_content = index_content.replace("{{REVISION}}", config.revision_html)
 
-    stylesheet_src = build_root_asset_href(asset_context.web_assets.stylesheet_path)
-    clipboard_src = build_root_asset_href(asset_context.web_assets.clipboard_script_path)
-    theme_src = build_root_asset_href(asset_context.web_assets.theme_script_path)
+    stylesheet_src = build_root_asset_href(
+        config.asset_context.web_assets.stylesheet_path
+    )
+    clipboard_src = build_root_asset_href(
+        config.asset_context.web_assets.clipboard_script_path
+    )
+    theme_src = build_root_asset_href(config.asset_context.web_assets.theme_script_path)
     index_content = index_content.replace(
         "{{STYLESHEET_SRC}}", html.escape(stylesheet_src)
     )
@@ -2938,10 +2967,10 @@ def build_html_from_svgs(
     )
     index_content = index_content.replace("{{THEME_SRC}}", html.escape(theme_src))
     rss_feed_link = ""
-    if rss_feed_path:
+    if config.rss_feed_path:
         rss_feed_href = build_relative_href(
             html_dir,
-            rss_feed_path,
+            config.rss_feed_path,
         )
         rss_feed_link = (
             '<link rel="alternate" type="application/rss+xml" '
@@ -2950,7 +2979,9 @@ def build_html_from_svgs(
     index_content = index_content.replace("{{RSS_FEED_LINK}}", rss_feed_link)
 
     glyph_preload_html = ""
-    warmup_glyph_asset_path = glyph_asset_path or asset_context.global_glyph_asset_path
+    warmup_glyph_asset_path = (
+        glyph_asset_path or config.asset_context.global_glyph_asset_path
+    )
     if warmup_glyph_asset_path:
         glyph_src = build_root_asset_href(warmup_glyph_asset_path)
         glyph_symbol_id = _extract_first_glyph_symbol_id(warmup_glyph_asset_path)
@@ -2979,52 +3010,31 @@ def find_latest_revision(
     return selected.date, f"../../{selected.date}/{selected.entry_name}/index.html"
 
 
-def compile_and_build_html(
-    source_bytes: bytes,
-    output_dir: str,
-    asset_hash: str,
-    file_prefix: str,
-    template_path: str,
-    dest_dir: str,
-    title_format: str,
-    default_title: str,
-    asset_context: "DriverAssetContext",
-    description: Optional[str] = None,
-    typst_inputs: Optional["TypstInputs"] = None,
-    extract_title_from_pdf: bool = False,
-    hidden_text_override: Optional[str] = None,
-    svg_href_rewrites: Optional[Dict[str, str]] = None,
-    svg_name_prefix: str = "page",
-    html_filename: str = "index.html",
-    asset_dest_dir: Optional[str] = None,
-    rss_feed_path: Optional[str] = None,
-    og_type: str = "website",
-    og_url: Optional[str] = None,
-    glyph_scope_key: Optional[str] = None,
-    enable_shared_glyph_extraction: bool = True,
-    image_source_dir: Optional[str] = None,
-    site_base_url: Optional[str] = None,
-) -> str:
+def compile_and_build_html(request: CompileBuildRequest) -> str:
     display_compiled_date = datetime.now().strftime("%Y-%m-%d")
-    resolved_inputs_svg = dict(typst_inputs.svg) if typst_inputs is not None else {}
-    resolved_inputs_pdf = dict(typst_inputs.pdf) if typst_inputs is not None else {}
+    resolved_inputs_svg = (
+        dict(request.typst_inputs.svg) if request.typst_inputs is not None else {}
+    )
+    resolved_inputs_pdf = (
+        dict(request.typst_inputs.pdf) if request.typst_inputs is not None else {}
+    )
     resolved_inputs_svg.setdefault("display_compiled_date", display_compiled_date)
     resolved_inputs_pdf.setdefault("display_compiled_date", display_compiled_date)
 
-    svg_prefix = f"{svg_name_prefix}{{0p}}.{asset_hash}.svg"
-    pdf_name = f"{file_prefix}.{asset_hash}.pdf"
+    svg_prefix = f"{request.html.svg_name_prefix}{{0p}}.{request.asset_hash}.svg"
+    pdf_name = f"{request.file_prefix}.{request.asset_hash}.pdf"
     pdf_creation_timestamp = _resolve_pdf_creation_timestamp(resolved_inputs_pdf)
 
     run_typst_compile(
-        source_bytes,
-        os.path.join(output_dir, svg_prefix),
+        request.source_bytes,
+        os.path.join(request.output_dir, svg_prefix),
         export_format="svg",
         inputs=resolved_inputs_svg,
     )
 
-    pdf_path = os.path.join(output_dir, pdf_name)
+    pdf_path = os.path.join(request.output_dir, pdf_name)
     run_typst_compile(
-        source_bytes,
+        request.source_bytes,
         pdf_path,
         export_format="pdf",
         inputs=resolved_inputs_pdf,
@@ -3032,38 +3042,24 @@ def compile_and_build_html(
     )
 
     page_count = len(
-        [f for f in os.listdir(output_dir) if _is_generated_svg(f, svg_name_prefix)]
+        [
+            f
+            for f in os.listdir(request.output_dir)
+            if _is_generated_svg(f, request.html.svg_name_prefix)
+        ]
     )
 
     action_meta = extract_action_metadata_from_content(
-        source_bytes,
+        request.source_bytes,
         query_root=os.getcwd(),
         inputs=resolved_inputs_svg,
     )
 
     return build_html_from_svgs(
-        template_path=template_path,
-        output_dir=output_dir,
-        dest_dir=dest_dir,
+        config=request.html,
+        output_dir=request.output_dir,
         page_count=page_count,
-        title_format=title_format,
         pdf_path=pdf_path,
-        svg_href_rewrites=svg_href_rewrites,
-        extract_title_from_pdf=extract_title_from_pdf,
-        default_title=default_title,
-        description=description,
-        hidden_text_override=hidden_text_override,
-        svg_name_prefix=svg_name_prefix,
-        html_filename=html_filename,
-        asset_dest_dir=asset_dest_dir,
-        asset_context=asset_context,
-        rss_feed_path=rss_feed_path,
-        og_type=og_type,
-        og_url=og_url,
-        glyph_scope_key=glyph_scope_key or svg_name_prefix,
-        enable_shared_glyph_extraction=enable_shared_glyph_extraction,
-        image_source_dir=image_source_dir,
-        asset_hash=asset_hash,
-        site_base_url=site_base_url,
+        asset_hash=request.asset_hash,
         action_metadata=action_meta,
     )

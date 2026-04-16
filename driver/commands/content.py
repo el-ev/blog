@@ -15,8 +15,9 @@ from .shared import (
 )
 from .post_entries import is_internal_post_entry
 from .utils import (
+    CompileBuildRequest,
+    HtmlBuildConfig,
     build_typst_inputs,
-    build_page_head_title,
     reset_directory,
     compile_and_build_html,
     extract_first_description_sentence,
@@ -249,24 +250,27 @@ def update_content(args: Namespace) -> None:
     )
 
     compile_and_build_html(
-        source_bytes=content_source_bytes,
-        output_dir=output_dir,
-        asset_hash=asset_hash,
-        file_prefix="content",
-        template_path=template_path,
-        dest_dir=root_dir,
-        asset_dest_dir=content_asset_dir,
-        title_format="Blog Content Page {i}",
-        default_title=page_title,
-        description=page_description,
-        typst_inputs=typst_inputs,
-        extract_title_from_pdf=False,
-        hidden_text_override=hidden_text,
-        asset_context=asset_context,
-        rss_feed_path=os.path.join(root_dir, "rss.xml"),
-        og_type="website",
-        og_url=og_url,
-        site_base_url=base_url,
+        CompileBuildRequest(
+            source_bytes=content_source_bytes,
+            output_dir=output_dir,
+            asset_hash=asset_hash,
+            file_prefix="content",
+            typst_inputs=typst_inputs,
+            html=HtmlBuildConfig(
+                template_path=template_path,
+                dest_dir=root_dir,
+                title_format="Blog Content Page {i}",
+                default_title=page_title,
+                asset_context=asset_context,
+                description=page_description,
+                hidden_text_override=hidden_text,
+                asset_dest_dir=content_asset_dir,
+                rss_feed_path=os.path.join(root_dir, "rss.xml"),
+                og_type="website",
+                og_url=og_url,
+                site_base_url=base_url,
+            ),
+        )
     )
 
     glyph_target_dirs: List[str] = [root_dir, content_asset_dir]
