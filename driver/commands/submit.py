@@ -1,4 +1,5 @@
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+import json
 import os
 import shutil
 import sys
@@ -23,7 +24,6 @@ from .submission_meta import (
     build_meta_fields,
     compile_meta_page,
     extract_post_pdf_name,
-    load_meta_fields,
 )
 from .submission_workspace import (
     collect_relative_files,
@@ -35,6 +35,7 @@ from .submission_workspace import (
 )
 from .utils import (
     extract_declared_typst_string,
+    extract_first_description_sentence,
     extract_required_declared_typst_string,
     make_temp_dir,
     minify_html_file,
@@ -88,10 +89,13 @@ def _submit_to_destination(
     dest_dir = os.path.join(dest_base_dir, dest_dir_name)
     dest_assets_dir = os.path.join(dest_dir, "assets")
 
-    existing_meta_fields: Dict[str, str] = {}
+    existing_post_json: Dict[str, Any] = {}
     existing_manifest_data: Dict[str, Any] = {}
     if amend_mode and os.path.isdir(dest_dir):
-        existing_meta_fields = load_meta_fields(dest_dir)
+        _post_json_path = os.path.join(dest_dir, "post.json")
+        if os.path.isfile(_post_json_path):
+            with open(_post_json_path, "r", encoding="utf-8") as _f:
+                existing_post_json = json.load(_f)
         existing_manifest_data = load_manifest_data(os.path.join(dest_dir, "source"))
 
     staged_workspace_path, temp_root = stage_workspace_if_needed(
@@ -130,11 +134,8 @@ def _submit_to_destination(
         pdf_name, post_asset_hash = extract_post_pdf_name(dest_dir)
 
         meta_generated_at: Optional[str] = None
-        if amend_mode:
-            previous_source_hash = existing_meta_fields["Source Hash"]
-            previous_generated_at = existing_meta_fields["Generated At"]
-            if previous_source_hash == post_asset_hash:
-                meta_generated_at = previous_generated_at
+        if amend_mode and existing_post_json.get("source_hash") == post_asset_hash:
+            meta_generated_at = existing_post_json.get("generated_at")
 
         meta_fields = build_meta_fields(
             workspace_name=workspace_name,
@@ -168,6 +169,28 @@ def _submit_to_destination(
             og_url=meta_og_url,
             site_base_url=base_url,
         )
+
+        index_html_path = os.path.join(dest_dir, "index.html")
+        with open(index_html_path, "r", encoding="utf-8") as _f:
+            index_html = _f.read()
+        description = extract_first_description_sentence(
+            index_html,
+            post_title,
+            skip_texts=[post_subtitle] if post_subtitle else None,
+        )
+        with open(os.path.join(dest_dir, "post.json"), "w", encoding="utf-8") as _f:
+            json.dump(
+                {
+                    "title": post_title,
+                    "subtitle": post_subtitle,
+                    "description": description,
+                    "source_hash": post_asset_hash,
+                    "generated_at": meta_fields["Generated At"],
+                },
+                _f,
+                ensure_ascii=False,
+                indent=2,
+            )
 
         write_workspace_manifest(
             manifest_path=os.path.join(source_dest_dir, ".workspace-manifest.json"),

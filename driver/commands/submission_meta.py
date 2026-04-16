@@ -15,10 +15,6 @@ from .utils import (
     make_temp_dir,
 )
 
-_META_CODE_FIELD_PATTERN = re.compile(
-    r"<li>\s*([^:<]+):\s*<code>(.*?)</code>\s*</li>",
-    re.IGNORECASE | re.DOTALL,
-)
 def extract_post_pdf_name(post_dir: str) -> Tuple[str, str]:
     asset_dir = os.path.join(post_dir, "assets")
     if not os.path.isdir(asset_dir):
@@ -29,17 +25,6 @@ def extract_post_pdf_name(post_dir: str) -> Tuple[str, str]:
             continue
         return f"assets/{filename}", filename[len("post.") : -len(".pdf")]
     raise RuntimeError(f"Compiled post PDF not found in '{asset_dir}'.")
-
-
-def load_meta_fields(post_dir: str) -> Dict[str, str]:
-    meta_path = os.path.join(post_dir, "meta.html")
-    with open(meta_path, "r", encoding="utf-8") as f:
-        meta_html = f.read()
-
-    fields: Dict[str, str] = {}
-    for key, value in _META_CODE_FIELD_PATTERN.findall(meta_html):
-        fields[key.strip()] = html.unescape(value.strip())
-    return fields
 
 
 def build_meta_fields(

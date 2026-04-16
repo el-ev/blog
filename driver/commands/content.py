@@ -1,4 +1,5 @@
 import html
+import json
 import os
 import re
 import shutil
@@ -18,8 +19,6 @@ from .utils import (
     reset_directory,
     compile_and_build_html,
     extract_first_description_sentence,
-    extract_declared_typst_string,
-    extract_required_declared_typst_string,
     extract_required_declared_typst_string_from_source,
     hash_text_with_sources,
     minify_html_file,
@@ -53,12 +52,16 @@ def _collect_day_posts(date_dir: str, date_str: str) -> List[PostEntry]:
         if not os.path.isdir(post_path):
             continue
 
-        main_typ_path = os.path.join(post_path, "source", "main.typ")
-        title = extract_required_declared_typst_string(main_typ_path, "title")
-        title = _append_revision_suffix(post_dir_name, title)
-        subtitle = extract_declared_typst_string(main_typ_path, "subtitle")
-        index_html_path = os.path.join(post_path, "index.html")
-        description = _extract_post_description(index_html_path, title, subtitle)
+        post_json_path = os.path.join(post_path, "post.json")
+        if not os.path.isfile(post_json_path):
+            raise RuntimeError(
+                f"Missing post.json in '{post_path}'. Run 'amend-all' to regenerate."
+            )
+        with open(post_json_path, "r", encoding="utf-8") as _f:
+            post_data = json.load(_f)
+        title = _append_revision_suffix(post_dir_name, post_data["title"])
+        subtitle = post_data.get("subtitle")
+        description = post_data.get("description", title)
 
         day_posts.append(
             {
@@ -130,24 +133,6 @@ def _build_sitemap_lines(base_url: str, posts_by_date: PostsByDate) -> List[str]
 
     sitemap_lines.append("</urlset>")
     return sitemap_lines
-
-
-def _extract_post_description(
-    index_html_path: str,
-    fallback_description: str,
-    subtitle: Optional[str] = None,
-) -> str:
-    try:
-        with open(index_html_path, "r", encoding="utf-8") as f:
-            html_content = f.read()
-    except FileNotFoundError:
-        return fallback_description
-
-    return extract_first_description_sentence(
-        html_content,
-        fallback_description,
-        skip_texts=[subtitle] if subtitle else None,
-    )
 
 
 def _format_rss_pub_date(date_str: str) -> str:
