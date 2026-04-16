@@ -216,7 +216,7 @@ def update_content(args: Namespace) -> None:
 
     content_source = content_template.replace("{{POSTS}}", "\n".join(posts_typst_lines))
     hidden_text = _build_hidden_text(parsed_title, parsed_subtitle, posts_by_date)
-    page_title = build_page_head_title(parsed_title, _SITE_TITLE, parsed_subtitle)
+    page_title = parsed_title
     page_description = extract_first_description_sentence(hidden_text, parsed_subtitle)
 
     output_dir = os.path.join(args.build_base, "content")
