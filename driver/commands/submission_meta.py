@@ -7,6 +7,7 @@ from typing import Dict, List, Optional, Tuple
 
 from .utils import (
     DriverAssetContext,
+    TypstInputs,
     build_raw_copy_assets,
     compile_and_build_html,
     extract_typst_raws_from_content,
@@ -207,8 +208,7 @@ def compile_meta_page(
             title_format="Meta Page {i}",
             default_title=f"{post_title} - Meta",
             description=f"Metadata for {post_title}",
-            inputs_svg=input_values_svg,
-            inputs_pdf=input_values_pdf,
+            typst_inputs=TypstInputs(svg=input_values_svg, pdf=input_values_pdf),
             extract_title_from_pdf=False,
             hidden_text_override=meta_hidden_text,
             raw_copy_html=raw_copy_html,

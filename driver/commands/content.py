@@ -13,8 +13,11 @@ from .shared import (
     resolve_base_url,
 )
 from .utils import (
+    TypstInputs,
+    build_page_head_title,
     reset_directory,
     compile_and_build_html,
+    extract_first_description_sentence,
     extract_declared_typst_string,
     extract_required_declared_typst_string,
     extract_required_declared_typst_string_from_source,
@@ -27,6 +30,7 @@ PostEntry = Dict[str, Any]
 PostsByDate = Dict[str, List[PostEntry]]
 
 _REVISION_SUFFIX_PATTERN = re.compile(r"-(\d+)$")
+_SITE_TITLE = "Blog"
 
 
 def _is_internal_post_entry(post_dir_name: str) -> bool:
@@ -53,10 +57,13 @@ def _collect_day_posts(date_dir: str, date_str: str) -> List[PostEntry]:
         title = extract_required_declared_typst_string(main_typ_path, "title")
         title = _append_revision_suffix(post_dir_name, title)
         subtitle = extract_declared_typst_string(main_typ_path, "subtitle")
+        index_html_path = os.path.join(post_path, "index.html")
+        description = _extract_post_description(index_html_path, title, subtitle)
 
         day_posts.append(
             {
                 "name": title,
+                "description": description,
                 "subtitle": subtitle,
                 "link": f"./posts/{date_str}/{post_dir_name}/index.html",
                 "time": os.path.getmtime(post_path),
@@ -125,18 +132,22 @@ def _build_sitemap_lines(base_url: str, posts_by_date: PostsByDate) -> List[str]
     return sitemap_lines
 
 
-def _copy_root_static_file(driver_dir: str, root_dir: str, filename: str) -> str:
-    src_path = os.path.join(driver_dir, filename)
-    dst_path = os.path.join(root_dir, filename)
-    shutil.copy2(src_path, dst_path)
-    return dst_path
+def _extract_post_description(
+    index_html_path: str,
+    fallback_description: str,
+    subtitle: Optional[str] = None,
+) -> str:
+    try:
+        with open(index_html_path, "r", encoding="utf-8") as f:
+            html_content = f.read()
+    except FileNotFoundError:
+        return fallback_description
 
-
-def _build_post_permalink(base_url: str, post_link: str) -> str:
-    rel_link_clean = post_link.lstrip("./")
-    if rel_link_clean.endswith("index.html"):
-        rel_link_clean = rel_link_clean[:-10]
-    return f"{base_url}/{rel_link_clean}"
+    return extract_first_description_sentence(
+        html_content,
+        fallback_description,
+        skip_texts=[subtitle] if subtitle else None,
+    )
 
 
 def _format_rss_pub_date(date_str: str) -> str:
@@ -178,10 +189,11 @@ def _build_rss_lines(
         )
 
     for post in all_posts:
-        post_url = _build_post_permalink(base_url, str(post["link"]))
-        item_description = str(
-            post["subtitle"] if post["subtitle"] is not None else post["name"]
-        )
+        rel_link_clean = str(post["link"]).lstrip("./")
+        if rel_link_clean.endswith("index.html"):
+            rel_link_clean = rel_link_clean[:-10]
+        post_url = f"{base_url}/{rel_link_clean}"
+        item_description = str(post["description"])
         rss_lines.extend(
             [
                 "    <item>",
@@ -228,6 +240,8 @@ def update_content(args: Namespace) -> None:
 
     content_source = content_template.replace("{{POSTS}}", "\n".join(posts_typst_lines))
     hidden_text = _build_hidden_text(parsed_title, parsed_subtitle, posts_by_date)
+    page_title = build_page_head_title(parsed_title, _SITE_TITLE, parsed_subtitle)
+    page_description = extract_first_description_sentence(hidden_text, parsed_subtitle)
 
     output_dir = os.path.join(args.build_base, "content")
     reset_directory(output_dir)
@@ -253,7 +267,8 @@ def update_content(args: Namespace) -> None:
 
     root_dir: str = args.root_dir
     os.makedirs(root_dir, exist_ok=True)
-    robots_path = _copy_root_static_file(base_dir, root_dir, "robots.txt")
+    robots_path = os.path.join(root_dir, "robots.txt")
+    shutil.copy2(os.path.join(base_dir, "robots.txt"), robots_path)
     content_asset_dir = os.path.join(root_dir, "assets")
     asset_context = build_driver_asset_context(base_dir, root_dir)
     base_url = resolve_base_url(args)
@@ -273,10 +288,9 @@ def update_content(args: Namespace) -> None:
         dest_dir=root_dir,
         asset_dest_dir=content_asset_dir,
         title_format="Blog Content Page {i}",
-        default_title=parsed_title,
-        description=parsed_subtitle,
-        inputs_svg=input_values_svg,
-        inputs_pdf=input_values_pdf,
+        default_title=page_title,
+        description=page_description,
+        typst_inputs=TypstInputs(svg=input_values_svg, pdf=input_values_pdf),
         extract_title_from_pdf=False,
         hidden_text_override=hidden_text,
         asset_context=asset_context,

@@ -19,8 +19,12 @@ from .shared import (
 )
 from .utils import (
     WORKSPACE_PUBLIC_DIR_NAME,
+    PostSourceContent,
+    TypstInputs,
     build_raw_copy_assets,
+    build_page_head_title,
     compile_and_build_html,
+    extract_first_description_sentence,
     extract_declared_typst_string,
     extract_required_declared_typst_string,
     extract_typst_headings_from_content,
@@ -38,9 +42,6 @@ from .utils import (
 )
 
 _SITE_TITLE = "Blog"
-_HTML_TAG_PATTERN = re.compile(r"<[^>]+>")
-_PARAGRAPH_PATTERN = re.compile(r"<p\b[^>]*>(.*?)</p>", flags=re.IGNORECASE | re.DOTALL)
-_SENTENCE_PATTERN = re.compile(r".+?(?:[.!?](?=\s|$)|$)")
 
 
 def _copy_workspace_public_files(workspace_path: str, output_dir: str) -> int:
@@ -76,7 +77,7 @@ def _build_typst_inputs(
     last_revision_url: Optional[str],
     edited_date: Optional[str] = None,
     publish_date: Optional[str] = None,
-) -> Tuple[Dict[str, str], Dict[str, str]]:
+) -> TypstInputs:
     input_values_svg: Dict[str, str] = {"with_driver": "true", "export_format": "svg"}
     input_values_pdf: Dict[str, str] = {"with_driver": "true", "export_format": "pdf"}
     if publish_date:
@@ -90,7 +91,7 @@ def _build_typst_inputs(
         input_values_svg["last_revision_url"] = last_revision_url
         input_values_pdf["last_revision_date"] = last_revision_date
         input_values_pdf["last_revision_url"] = last_revision_url
-    return input_values_svg, input_values_pdf
+    return TypstInputs(svg=input_values_svg, pdf=input_values_pdf)
 
 
 def _workspace_latest_modified_date(workspace_path: str) -> str:
@@ -128,64 +129,6 @@ def _prepare_compile_sources(
         "// IMPORT_MAIN", f'#import "{main_typ_path}": *'
     )
     return driver_source.encode(), main_typ_abs_path, asset_hash
-
-
-def _build_article_head_title(post_title: str, post_subtitle: Optional[str]) -> str:
-    title_parts = [post_title]
-    if post_subtitle:
-        title_parts.append(post_subtitle)
-    title_parts.append(_SITE_TITLE)
-    return " - ".join(title_parts)
-
-
-def _strip_html_text(fragment: str) -> str:
-    text = _HTML_TAG_PATTERN.sub(" ", fragment)
-    text = html.unescape(text)
-    return re.sub(r"\s+", " ", text).strip()
-
-
-def _extract_meta_description(
-    hidden_text: str,
-    fallback_description: str,
-    max_length: int = 220,
-) -> str:
-    candidate_sentences = []
-
-    for paragraph_match in _PARAGRAPH_PATTERN.finditer(hidden_text):
-        paragraph_text = _strip_html_text(paragraph_match.group(1))
-        if not paragraph_text:
-            continue
-        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", paragraph_text):
-            continue
-
-        for sentence_match in _SENTENCE_PATTERN.finditer(paragraph_text):
-            sentence = sentence_match.group(0).strip()
-            candidate_sentences.append(sentence)
-
-        if candidate_sentences:
-            break
-
-    if not candidate_sentences:
-        return fallback_description
-
-    description = ""
-    for sentence in candidate_sentences:
-        candidate = sentence if not description else f"{description} {sentence}"
-        if len(candidate) > max_length:
-            break
-        description = candidate
-        if len(description) >= max_length // 2:
-            break
-
-    if description:
-        return description
-
-    first_sentence = candidate_sentences[0]
-    if len(first_sentence) <= max_length:
-        return first_sentence
-    return first_sentence[: max_length - 1].rstrip() + "…"
-
-
 def _replace_required_pattern(
     html_content: str,
     pattern: str,
@@ -204,9 +147,13 @@ def _finalize_article_metadata(
     post_subtitle: Optional[str],
     hidden_text: str,
 ) -> None:
-    final_title = _build_article_head_title(post_title, post_subtitle)
+    final_title = build_page_head_title(post_title, _SITE_TITLE, post_subtitle)
     fallback_description = post_subtitle or post_title
-    meta_description = _extract_meta_description(hidden_text, fallback_description)
+    meta_description = extract_first_description_sentence(
+        hidden_text,
+        fallback_description,
+        skip_texts=[post_subtitle] if post_subtitle else None,
+    )
 
     with open(index_path, "r", encoding="utf-8") as f:
         html_content = f.read()
@@ -267,8 +214,7 @@ def _compile_initial_post_html(
     base_dir: str,
     driver_source_bytes: bytes,
     asset_hash: str,
-    input_values_svg: Dict[str, str],
-    input_values_pdf: Dict[str, str],
+    typst_inputs: TypstInputs,
     raw_copy_html: str,
     post_title: str,
     post_subtitle: Optional[str],
@@ -291,8 +237,7 @@ def _compile_initial_post_html(
         title_format="Blog Page {i}",
         default_title=post_title,
         description=post_subtitle,
-        inputs_svg=input_values_svg,
-        inputs_pdf=input_values_pdf,
+        typst_inputs=typst_inputs,
         extract_title_from_pdf=True,
         hidden_text_override=initial_hidden_text,
         raw_copy_html=raw_copy_html,
@@ -380,44 +325,46 @@ def run_compile(args: Namespace) -> None:
             workspace_name,
             skip_latest=skip_latest,
         )
-        input_values_svg, input_values_pdf = _build_typst_inputs(
+        typst_inputs = _build_typst_inputs(
             last_revision_date,
             last_revision_url,
             edited_date=edited_date,
             publish_date=publish_date,
         )
 
-        source_links = extract_typst_links(
-            main_typ_abs_path,
-            query_root=os.getcwd(),
-        )
-        source_raws = extract_typst_raws_from_content(
-            driver_source_bytes,
-            query_root=os.getcwd(),
-            inputs=input_values_svg,
-        )
-        source_headings = extract_typst_headings_from_content(
-            driver_source_bytes,
-            query_root=os.getcwd(),
-            inputs=input_values_svg,
-        )
-        source_tables = extract_typst_tables_from_content(
-            driver_source_bytes,
-            query_root=os.getcwd(),
-            inputs=input_values_svg,
-        )
-        source_figures = extract_typst_figures_from_content(
-            driver_source_bytes,
-            query_root=os.getcwd(),
-            inputs=input_values_pdf,
-        )
-        source_info_blocks = extract_typst_info_blocks_from_content(
-            driver_source_bytes,
-            query_root=os.getcwd(),
-            inputs=input_values_pdf,
+        source_content = PostSourceContent(
+            links=extract_typst_links(
+                main_typ_abs_path,
+                query_root=os.getcwd(),
+            ),
+            raws=extract_typst_raws_from_content(
+                driver_source_bytes,
+                query_root=os.getcwd(),
+                inputs=typst_inputs.svg,
+            ),
+            headings=extract_typst_headings_from_content(
+                driver_source_bytes,
+                query_root=os.getcwd(),
+                inputs=typst_inputs.svg,
+            ),
+            tables=extract_typst_tables_from_content(
+                driver_source_bytes,
+                query_root=os.getcwd(),
+                inputs=typst_inputs.svg,
+            ),
+            figures=extract_typst_figures_from_content(
+                driver_source_bytes,
+                query_root=os.getcwd(),
+                inputs=typst_inputs.pdf,
+            ),
+            info_blocks=extract_typst_info_blocks_from_content(
+                driver_source_bytes,
+                query_root=os.getcwd(),
+                inputs=typst_inputs.pdf,
+            ),
         )
         raw_copy_html = build_raw_copy_assets(
-            source_raws,
+            source_content.raws,
             asset_dir=output_dir,
         )
 
@@ -441,8 +388,7 @@ def run_compile(args: Namespace) -> None:
             base_dir=base_dir,
             driver_source_bytes=driver_source_bytes,
             asset_hash=asset_hash,
-            input_values_svg=input_values_svg,
-            input_values_pdf=input_values_pdf,
+            typst_inputs=typst_inputs,
             raw_copy_html=raw_copy_html,
             post_title=post_title,
             post_subtitle=post_subtitle,
@@ -457,16 +403,11 @@ def run_compile(args: Namespace) -> None:
         post_pdf_path = os.path.join(output_dir, f"post.{asset_hash}.pdf")
         final_hidden_text_override = build_final_hidden_text(
             post_pdf_path,
-            source_links,
-            source_raws,
-            source_headings,
-            source_tables,
+            source_content,
             post_subtitle,
             asset_hash,
             last_revision_date,
             last_revision_url,
-            source_figures=source_figures,
-            source_info_blocks=source_info_blocks,
             nav_links=[
                 ("../../../index.html", "Contents"),
                 ("meta.html", "Meta"),

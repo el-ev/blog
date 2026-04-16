@@ -3,10 +3,6 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 
-def _is_internal_post_entry(entry_name: str) -> bool:
-    return entry_name.startswith(".")
-
-
 @dataclass(frozen=True)
 class WorkspaceRevision:
     date: str
@@ -40,7 +36,7 @@ def list_workspace_revisions(
 
         day_revisions: List[WorkspaceRevision] = []
         for entry_name in os.listdir(date_dir):
-            if _is_internal_post_entry(entry_name):
+            if entry_name.startswith("."):
                 continue
             entry_path = os.path.join(date_dir, entry_name)
             if not os.path.isdir(entry_path):

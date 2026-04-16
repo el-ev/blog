@@ -5,7 +5,7 @@ import re
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from .utils import extract_pdf_text
+from .utils import extract_pdf_text, PostSourceContent
 
 _HIDDEN_PLACEHOLDER_PREFIX = "__HIDDEN_HTML_"
 _ORDERED_LIST_ITEM_PATTERN = re.compile(r"(?:^|\s)(\d+)\.\s+")
@@ -260,28 +260,6 @@ def _embed_raws_in_hidden_text(
         placeholder_html,
         block_placeholders,
     )
-
-
-def _ends_paragraph(line: str) -> bool:
-    return line.endswith((".", "!", "?", ":", ";", ".)", '."'))
-
-
-def _is_hidden_date_line(line: str) -> bool:
-    return bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}", line))
-
-
-def _is_hidden_metadata_line(line: str) -> bool:
-    return line.startswith("Edited on ") or line.startswith("Last revision on ")
-
-
-def _should_skip_hidden_line(line: str) -> bool:
-    return bool(
-        line.startswith("Compiled on ")
-        or line.startswith("Compiled at ")
-        or re.fullmatch(r"\d+", line)
-    )
-
-
 def _restore_hidden_placeholders(
     text: str,
     placeholder_html: List[Tuple[str, str]],
@@ -705,7 +683,11 @@ def _paragraphize_hidden_text(
             parts.append(line)
             continue
 
-        if _should_skip_hidden_line(line):
+        if (
+            line.startswith("Compiled on ")
+            or line.startswith("Compiled at ")
+            or re.fullmatch(r"\d+", line)
+        ):
             flush_current()
             close_list()
             continue
@@ -728,14 +710,14 @@ def _paragraphize_hidden_text(
             subtitle_emitted = True
             continue
 
-        if _is_hidden_date_line(line) and not date_emitted:
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", line) and not date_emitted:
             flush_current()
             close_list()
             parts.append(f'<p><time datetime="{line}">{line}</time></p>')
             date_emitted = True
             continue
 
-        if _is_hidden_metadata_line(line):
+        if line.startswith("Edited on ") or line.startswith("Last revision on "):
             flush_current()
             close_list()
             parts.append(f"<p>{line}</p>")
@@ -759,7 +741,7 @@ def _paragraphize_hidden_text(
 
         close_list()
         current_lines.append(line)
-        if _ends_paragraph(line):
+        if line.endswith((".", "!", "?", ":", ";", ".)", '."')):
             flush_current()
 
     flush_current()
@@ -800,16 +782,11 @@ def replace_hidden_block(
 
 def build_final_hidden_text(
     post_pdf_path: str,
-    source_links: List[Tuple[str, str]],
-    source_raws: List[Tuple[str, bool]],
-    source_headings: List[Tuple[int, str]],
-    source_tables: List[Dict[str, Any]],
+    source_content: PostSourceContent,
     post_subtitle: Optional[str],
     asset_hash: str,
     last_revision_date: Optional[str],
     last_revision_url: Optional[str],
-    source_info_blocks: Optional[List[str]] = None,
-    source_figures: Optional[List[Tuple[str, str, str]]] = None,
     nav_links: Optional[List[Tuple[str, str]]] = None,
 ) -> str:
     _, extracted_hidden = extract_pdf_text(
@@ -821,35 +798,35 @@ def build_final_hidden_text(
     placeholder_html: List[Tuple[str, str]] = []
     inner_hidden, heading_placeholders = _inject_heading_placeholders(
         inner_hidden,
-        source_headings,
+        source_content.headings,
         placeholder_html,
     )
     inner_hidden, table_placeholders = _inject_table_placeholders(
         inner_hidden,
-        source_tables,
+        source_content.tables,
         placeholder_html,
     )
     info_placeholders: Set[str] = set()
-    if source_info_blocks:
+    if source_content.info_blocks:
         inner_hidden, info_placeholders = _inject_info_block_placeholders(
             inner_hidden,
-            source_info_blocks,
+            source_content.info_blocks,
             placeholder_html,
-            source_links=source_links,
+            source_links=source_content.links,
         )
     embedded_hidden_text, remaining_links = _embed_links_in_hidden_text(
         inner_hidden,
-        source_links,
+        source_content.links,
         placeholder_html,
     )
     figure_placeholders: Set[str] = set()
-    if source_figures:
+    if source_content.figures:
         embedded_hidden_text, figure_placeholders = _inject_figure_placeholders(
             embedded_hidden_text,
-            source_figures,
+            source_content.figures,
             placeholder_html,
             asset_hash,
-            source_links=source_links,
+            source_links=source_content.links,
         )
     (
         embedded_hidden_text,
@@ -859,7 +836,7 @@ def build_final_hidden_text(
         block_placeholders,
     ) = _embed_raws_in_hidden_text(
         embedded_hidden_text,
-        source_raws,
+        source_content.raws,
         placeholder_start_index=len(placeholder_html),
     )
     placeholder_html.extend(raw_placeholder_html)

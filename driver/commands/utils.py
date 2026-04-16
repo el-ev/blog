@@ -26,6 +26,7 @@ _lightningcss_missing_warned = False
 _terser_missing_warned = False
 _WORKSPACE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _TYPST_DECLARED_STRING_PATTERN_TEMPLATE = r'#let\s+{name}\s*=\s*"([^"]*)"'
+_TYPST_DECLARED_CONTENT_PATTERN_TEMPLATE = r"#let\s+{name}\s*=\s*\[(.*?)\]"
 _ASSET_HASH_LENGTH = 6
 _RAW_COPY_ID_HASH_LENGTH = 10
 WORKSPACE_PUBLIC_DIR_NAME = "public"
@@ -42,6 +43,16 @@ _SVGO_GLYPH_CONFIG_PATH = os.path.join(
 _GLOBAL_GLYPH_MAP_VERSION = 1
 GLOBAL_GLYPH_ASSET_FILENAME = "glyphs.svg"
 GLOBAL_GLYPH_MAP_FILENAME = "glyph-map.json"
+_HTML_TAG_PATTERN = re.compile(r"<[^>]+>")
+_BLOCKQUOTE_PATTERN = re.compile(
+    r"<blockquote\b[^>]*>.*?</blockquote>",
+    flags=re.IGNORECASE | re.DOTALL,
+)
+_PARAGRAPH_WITH_ATTRS_PATTERN = re.compile(
+    r"<p\b([^>]*)>(.*?)</p>",
+    flags=re.IGNORECASE | re.DOTALL,
+)
+_SENTENCE_PATTERN = re.compile(r".+?(?:[.!?](?=\s|$)|$)")
 _SVG_THEME_FILL_CLASS_MAP: Dict[str, str] = {
     "#fff": "theme-paper-bg",
     "#ffffff": "theme-paper-bg",
@@ -144,6 +155,22 @@ class DriverAssetContext:
     global_glyph_map_path: str
 
 
+@dataclass(frozen=True)
+class TypstInputs:
+    svg: Dict[str, str]
+    pdf: Dict[str, str]
+
+
+@dataclass(frozen=True)
+class PostSourceContent:
+    links: List[Tuple[str, str]]
+    raws: List[Tuple[str, bool]]
+    headings: List[Tuple[int, str]]
+    tables: List[Dict[str, Any]]
+    figures: Optional[List[Tuple[str, str, str]]] = None
+    info_blocks: Optional[List[str]] = None
+
+
 def _append_svg_class(attrs: str, class_name: str) -> str:
     class_match = re.search(r'\sclass="([^"]*)"', attrs)
     if class_match:
@@ -203,6 +230,83 @@ def _inject_svg_theme_style(svg_data: str) -> str:
 def make_raw_copy_id(text: str) -> str:
     digest = hashlib.sha1(text.encode("utf-8")).hexdigest()[:_RAW_COPY_ID_HASH_LENGTH]
     return f"{digest}"
+
+
+def build_page_head_title(
+    page_title: str,
+    site_title: str,
+    page_subtitle: Optional[str] = None,
+) -> str:
+    title_parts = [page_title]
+    if page_subtitle:
+        title_parts.append(page_subtitle)
+    if page_title != site_title:
+        title_parts.append(site_title)
+    return " - ".join(title_parts)
+
+
+def _strip_html_text(fragment: str) -> str:
+    text = _HTML_TAG_PATTERN.sub(" ", fragment)
+    text = html.unescape(text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _normalize_description_comparison_text(text: str) -> str:
+    normalized = html.unescape(text)
+    normalized = normalized.translate(
+        str.maketrans(
+            {
+                "\u2018": "'",
+                "\u2019": "'",
+                "\u201c": '"',
+                "\u201d": '"',
+                "\u2026": "...",
+            }
+        )
+    )
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
+def extract_first_description_sentence(
+    html_fragment: str,
+    fallback_description: str,
+    skip_texts: Optional[List[str]] = None,
+    max_length: int = 220,
+) -> str:
+    searchable_fragment = _BLOCKQUOTE_PATTERN.sub("", html_fragment)
+    normalized_skip_texts = {
+        _normalize_description_comparison_text(text)
+        for text in (skip_texts or [])
+        if text and text.strip()
+    }
+    for paragraph_match in _PARAGRAPH_WITH_ATTRS_PATTERN.finditer(searchable_fragment):
+        paragraph_attrs = paragraph_match.group(1) or ""
+        if re.search(r'\bclass\s*=\s*"[^"]*\bsubtitle\b', paragraph_attrs):
+            continue
+
+        paragraph_text = _strip_html_text(paragraph_match.group(2))
+        if not paragraph_text:
+            continue
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", paragraph_text):
+            continue
+        if (
+            _normalize_description_comparison_text(paragraph_text)
+            in normalized_skip_texts
+        ):
+            continue
+
+        sentence_match = _SENTENCE_PATTERN.search(paragraph_text)
+        if not sentence_match:
+            continue
+
+        first_sentence = sentence_match.group(0).strip()
+        if not first_sentence:
+            continue
+        if len(first_sentence) <= max_length:
+            return first_sentence
+        return first_sentence[: max_length - 1].rstrip() + "…"
+
+    return fallback_description
 
 
 def _resolve_typst_path() -> str:
@@ -415,13 +519,25 @@ def _rebase_relative_href_for_destination(
 
 
 def extract_declared_typst_string_from_source(source: str, name: str) -> Optional[str]:
-    pattern = re.compile(
+    string_pattern = re.compile(
         _TYPST_DECLARED_STRING_PATTERN_TEMPLATE.format(name=re.escape(name))
     )
-    match = pattern.search(source)
+    match = string_pattern.search(source)
+    if match:
+        value = match.group(1).strip()
+        if not value:
+            return None
+        return value
+
+    content_pattern = re.compile(
+        _TYPST_DECLARED_CONTENT_PATTERN_TEMPLATE.format(name=re.escape(name)),
+        flags=re.DOTALL,
+    )
+    match = content_pattern.search(source)
     if not match:
         return None
-    value = match.group(1).strip()
+
+    value = re.sub(r"\s+", " ", match.group(1)).strip()
     if not value:
         return None
     return value
@@ -2998,8 +3114,7 @@ def compile_and_build_html(
     default_title: str,
     asset_context: "DriverAssetContext",
     description: Optional[str] = None,
-    inputs_svg: Optional[Dict[str, str]] = None,
-    inputs_pdf: Optional[Dict[str, str]] = None,
+    typst_inputs: Optional["TypstInputs"] = None,
     extract_title_from_pdf: bool = False,
     hidden_text_override: Optional[str] = None,
     raw_copy_html: str = "",
@@ -3016,8 +3131,8 @@ def compile_and_build_html(
     site_base_url: Optional[str] = None,
 ) -> str:
     display_compiled_date = datetime.now().strftime("%Y-%m-%d")
-    resolved_inputs_svg = dict(inputs_svg) if inputs_svg is not None else {}
-    resolved_inputs_pdf = dict(inputs_pdf) if inputs_pdf is not None else {}
+    resolved_inputs_svg = dict(typst_inputs.svg) if typst_inputs is not None else {}
+    resolved_inputs_pdf = dict(typst_inputs.pdf) if typst_inputs is not None else {}
     resolved_inputs_svg.setdefault("display_compiled_date", display_compiled_date)
     resolved_inputs_pdf.setdefault("display_compiled_date", display_compiled_date)
 
