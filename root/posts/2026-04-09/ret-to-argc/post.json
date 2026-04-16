@@ -1,0 +1,7 @@
+{
+  "title": "Ret to Argc",
+  "subtitle": "What happens when you return from a bare program?",
+  "description": "Suppose we are working on a x86_64-unknown-linux-gnu machine.",
+  "source_hash": "0b7561",
+  "generated_at": "2026-04-16 21:29:39"
+}

@@ -1,0 +1,9 @@
+{
+  "workspace": "hello-world",
+  "publish_date": "2026-04-04",
+  "revision": "hello-world",
+  "files": [
+    "main.typ"
+  ],
+  "generated_at": "2026-04-10T16:32:00"
+}

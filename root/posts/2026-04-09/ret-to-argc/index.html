@@ -1,0 +1,83 @@
+<!DOCTYPE html><html lang="en" prefix="og: https://ogp.me/ns#"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="description" content="Suppose we are working on a x86_64-unknown-linux-gnu machine."><meta property="og:title" content="Ret to Argc - What happens when you return from a bare program? - Blog"><meta property="og:description" content="Suppose we are working on a x86_64-unknown-linux-gnu machine."><meta property="og:type" content="article"><meta property="og:url" content="https://blog.owo.li/posts/2026-04-09/ret-to-argc/index.html"><title>Ret to Argc - What happens when you return from a bare program? - Blog</title><style>:root{--initial-page-bg:#fff;color:#141414;background-color:#f5f5f5}:root[data-theme=dark]{--initial-page-bg:#161b22;color:#e8ecf2;background-color:#0f141b}main{z-index:1;position:relative}</style><script>(()=>{let t="light";try{const e=window.localStorage?.getItem("blog-color-theme");"light"===e||"dark"===e?t=e:window.matchMedia?.("(prefers-color-scheme: dark)")?.matches&&(t="dark")}catch{}const e=document.documentElement,l="dark"===t;e.setAttribute("data-theme",t),e.classList.toggle("theme-light",!l),e.classList.toggle("theme-dark",l),e.style.colorScheme=l?"dark":"light"})();</script><link rel="stylesheet" href="/assets/site.cd63f3.css"></head><body>
+<svg data-glyph-preload="true" aria-hidden="true" width="0" height="0" style="position:absolute;opacity:0;pointer-events:none"><use href="/assets/glyphs.417034.svg#g1"></use></svg>
+<main><div class="sr-only"><h1>Ret to Argc</h1><p class="subtitle">What happens when you return from a bare program?</p><blockquote class="info-block"><p>Suppose we are working on a <code id="raw-2c45b68ccb">x86_64-unknown-linux-gnu</code> machine.</p></blockquote><h3>Crash Demo</h3><p>What happens if a Linux process returns from <code id="raw-bd8e670a2d">_start</code> ?</p><p></p><pre id="raw-bf98813cd8"><code>// ret.c
+int _start() {
+  return 0;
+}</code></pre><p></p><pre id="raw-e947d3e3f9"><code>$ gcc -nostdlib -static -o ret ret.c
+$ ./ret
+Segmentation fault (core dumped)
+$ echo $?
+139</code></pre><p>It crashes because <code id="raw-41217c2fc7">ret</code> does not return to a caller here; it pops the process&#x27;s initial <code id="raw-da7228e374">argc</code> value and treats it as a code address.</p><h3>What happens in a Normal C Program</h3><p>In a normal C program, <code id="raw-bd8e670a2d">_start</code> does not return: it hands control to <code id="raw-90894fc2bf">__libc_start_main</code> , which in turn calls <code id="raw-b28b7af693">main</code> and then exits via syscall <code id="raw-de3ac21778">exit</code> .</p><p>At the source level, we talk about <code id="raw-b28b7af693">main</code> as the entry point. At the binary level, that role belongs to <code id="raw-bd8e670a2d">_start</code> . <code id="raw-bd8e670a2d">_start</code> calls <code id="raw-90894fc2bf">__libc_start_main</code> , which in turn calls <code id="raw-b28b7af693">main</code> .</p><p>When <code id="raw-b28b7af693">main</code> returns, its return value is passed back to <code id="raw-90894fc2bf">__libc_start_main</code> , which then passes it to the kernel via the <code id="raw-de3ac21778">exit</code> system call. In normal execution, <code id="raw-bd8e670a2d">_start</code> (and <code id="raw-90894fc2bf">__libc_start_main</code> ) never returns.</p><h3>What <code id="raw-41217c2fc7">ret</code> Sees at <code id="raw-bd8e670a2d">_start</code></h3><blockquote class="info-block"><p>RET pops <code id="raw-2cd2de3e88">[RSP]</code> into <code id="raw-23ecfd73cf">RIP</code>, and at process entry <code id="raw-2cd2de3e88">[RSP]</code> holds <code id="raw-da7228e374">argc</code>.</p></blockquote><p>When the kernel enters <code id="raw-bd8e670a2d">_start</code> on Linux x86_64, the top of the stack is not a saved return address; it is <code id="raw-da7228e374">argc</code> .</p><p>At that point, the stack looks like this:</p><p></p><pre id="raw-2c0d25ec9c"><code>High    | AUX, Strings, ...      |
+        | NULL                   |
+  ^     | envp[n]...envp[0]      |
+  |     | NULL                   |
+        | argv[n]...argv[0]      |
+[RSP]   | argc                   |
+Low     | (Undefined)            |</code></pre><p>A normal <code id="raw-41217c2fc7">ret</code> instruction performs a very small sequence of actions:</p><ol><li>the kernel jumps to <code id="raw-bd8e670a2d">_start</code></li><li><code id="raw-bd8e670a2d">_start</code> executes <code id="raw-41217c2fc7">ret</code></li><li>the CPU loads <code id="raw-e96cf7ae08">RIP &lt;- [RSP]</code></li><li>here <code id="raw-2cd2de3e88">[RSP]</code> is <code id="raw-da7228e374">argc</code></li><li>in the demo, <code id="raw-95664fc880">argc = 1</code>, so the CPU tries to jump to address <code id="raw-1cb7a2e9af">0x1</code></li></ol><p>That last jump faults immediately, which is why the bare program crashes with <code id="raw-ef0cb727b9">SIGSEGV</code> .</p><h3>Can <code id="raw-da7228e374">argc</code> Be a Valid Return Address?</h3><p>If we can pass enough arguments to <code id="raw-bd8e670a2d">_start</code> so that the value in the <code id="raw-da7228e374">argc</code> slot is a valid executable address, we can actually make it return.</p><p>The two main questions are:</p><ol><li>How many arguments can we pass to <code id="raw-bd8e670a2d">_start</code>?</li><li>What is the lowest valid executable address we have in the process?</li></ol><h4>How Many Arguments Can We Pass?</h4><p>On a typical Linux system:</p><ul><li>argument is capped to 1/4 of the process stack limit</li><li>the default stack limit is often 8 MiB (which is configurable via <code id="raw-dbfe57f1f3">ulimit -s</code>)</li><li>each argument costs at least 9 bytes of stack space (a pointer plus a null terminator)</li></ul><p>So we can pass about <code id="raw-87d403472f">230,000</code> arguments.</p><h4>What is the lowest valid executable address?</h4><p>A normal non-PIE ELF binary has a default base address of <code id="raw-18da787b7b">0x400000</code> ( <code id="raw-00d0451515">4,194,304</code> ), which is far higher than our <code id="raw-87d403472f">230,000</code> limit. Because of this, we can&#x27;t directly jump to the code section of a binary.</p><p>Linux exposes a sysctl called <code id="raw-08acc6dbcc">vm.mmap_min_addr</code> , which sets the minimum virtual address a process may map. On typical systems this is <code id="raw-1260ebb2e4">65536</code> , or <code id="raw-67e6c786c9">0x10000</code> , which is well within our reach. We can map a executable page at <code id="raw-67e6c786c9">0x10000</code> and put our code there.</p><blockquote class="info-block"><p>The <code id="raw-08acc6dbcc">vm.mmap_min_addr</code> sysctl is a security feature that prevents mapping memory at very low addresses, which can help mitigate certain types of exploits. However, it also means that we cannot map memory at address <code id="raw-fc617e77d2">0x0</code>. Fortunately, <code id="raw-67e6c786c9">0x10000</code> is still a valid executable address that we can use for our purposes.</p></blockquote><h3>Building the Demo</h3><p>This program maps one executable page at <code id="raw-67e6c786c9">0x10000</code> , writes <code id="raw-0b1b447a7b">exit(42)</code> there, and then executes <code id="raw-41217c2fc7">ret</code> .</p><h4>bare_ret.s</h4><p></p><pre id="raw-28267406e8"><code>; bare_ret.s
+.intel_syntax noprefix
+.global _start
+
+.equ TARGET, 0x10000
+
+.section .text
+_start:
+    mov rax, 9        ; sys_mmap
+    mov rdi, TARGET
+    mov rsi, 4096
+    mov rdx, 7        ; PROT_READ | PROT_WRITE | PROT_EXEC
+    mov r10, 0x32     ; MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED
+    mov r8, -1
+    xor r9d, r9d
+    syscall
+
+    cmp rax, -4095
+    jae .failed
+
+    ; b8 3c 00 00 00   mov eax, 60
+    ; bf 2a 00 00 00   mov edi, 42
+    ; 0f 05            syscall
+    movabs rbx, 0x002abf0000003cb8
+    mov qword ptr [TARGET + 0], rbx
+    mov dword ptr [TARGET + 8], 0x050f0000
+
+    ret
+
+.failed:
+    mov eax, 60
+    mov edi, 1
+    syscall</code></pre><p>To invoke the program with that many arguments, it is convenient to write a small launcher.</p><h4>launcher.c</h4><p></p><pre id="raw-4ac00fcda8"><code>// launcher.c
+#define _GNU_SOURCE
+#include &lt;errno.h&gt;
+#include &lt;stdio.h&gt;
+#include &lt;stdlib.h&gt;
+#include &lt;string.h&gt;
+#include &lt;unistd.h&gt;
+
+#define TARGET_ARGC 0x10000
+
+int main(void) {
+    const char *prog = &quot;./bare_ret&quot;;
+    const size_t argc_target = TARGET_ARGC;
+
+    char **argv = calloc(argc_target + 1, sizeof(char *));
+    if (!argv) {
+        perror(&quot;calloc argv&quot;);
+        return 1;
+    }
+
+    argv[0] = (char *)prog;
+    for (size_t i = 1; i &lt; argc_target; i++) {
+        argv[i] = (char *)&quot;&quot;;
+    }
+    argv[argc_target] = NULL;
+
+    char *envp[] = { NULL };
+    execve(prog, argv, envp);
+
+    fprintf(stderr, &quot;execve failed: %s\n&quot;, strerror(errno));
+    free(argv);
+    return 1;
+}</code></pre><p></p><pre id="raw-1ca7e40a98"><code>$ gcc -nostdlib -static -o bare_ret bare_ret.s
+$ gcc -o launcher launcher.c
+$ ./launcher &amp;&amp; echo $?
+42</code></pre><h3>What Actually Happens</h3><p>The program didn&#x27;t crash. Instead, it successfully returned from <code id="raw-bd8e670a2d">_start</code> and exited with status <code id="raw-92cfceb39d">42</code> . The exact execution flow is:</p><ol><li><code id="raw-5b4cc0d40c">launcher</code> allocates an <code id="raw-44fa84e333">argv</code> array with <code id="raw-67e6c786c9">0x10000</code> entries, counting the program name</li><li><code id="raw-5abe10b97c">execve</code> starts <code id="raw-ede6a3f2cf">bare_ret</code> with <code id="raw-38d2ca599a">argc = 0x10000</code></li><li>the kernel places that <code id="raw-da7228e374">argc</code> value at <code id="raw-2cd2de3e88">[RSP]</code> before entering <code id="raw-bd8e670a2d">_start</code></li><li><code id="raw-bd8e670a2d">_start</code> calls <code id="raw-be5bdb476e">mmap</code> to create an executable page at <code id="raw-67e6c786c9">0x10000</code></li><li><code id="raw-bd8e670a2d">_start</code> writes machine code for <code id="raw-0b1b447a7b">exit(42)</code> into that page</li><li><code id="raw-bd8e670a2d">_start</code> executes <code id="raw-41217c2fc7">ret</code></li><li>the CPU pops <code id="raw-67e6c786c9">0x10000</code> from <code id="raw-2cd2de3e88">[RSP]</code> into <code id="raw-23ecfd73cf">RIP</code></li><li>execution continues at <code id="raw-67e6c786c9">0x10000</code>, which performs the <code id="raw-0b1b447a7b">exit(42)</code> syscall</li></ol><p>And that is the end of the story.</p><p>Edited on 2026-04-09</p><nav aria-label="Post navigation"><ul><li><a href="../../../index.html" tabindex="-1">Contents</a></li><li><a href="meta.html" tabindex="-1">Meta</a></li><li><a href="./assets/post.0b7561.pdf" tabindex="-1">PDF</a></li></ul></nav></div><object class="page" type="image/svg+xml" data="./assets/page1.0b7561.svg" title="Blog Page 1"></object><object class="page" type="image/svg+xml" data="./assets/page2.0b7561.svg" title="Blog Page 2"></object><object class="page" type="image/svg+xml" data="./assets/page3.0b7561.svg" title="Blog Page 3"></object><object class="page" type="image/svg+xml" data="./assets/page4.0b7561.svg" title="Blog Page 4"></object><object class="page" type="image/svg+xml" data="./assets/page5.0b7561.svg" title="Blog Page 5"></object></main><script defer src="/assets/theme.ddbde4.min.js"></script><script defer src="/assets/clipboard.5e743f.min.js"></script><div aria-hidden="true" style="position: absolute; z-index: -1; top: 100px; opacity: 0.01;">You caught me!</div></body></html>
