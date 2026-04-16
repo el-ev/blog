@@ -9,29 +9,30 @@ from datetime import datetime
 from typing import Dict, Optional
 
 from .compile_hidden_text import (
-    build_final_hidden_text,
+    build_hidden_text,
     replace_hidden_block,
 )
 from .shared import (
-    build_driver_asset_context,
-    build_public_page_url,
+    build_asset_ctx,
+    page_url,
     resolve_base_url,
 )
 from .utils import (
     CompileBuildRequest,
     HtmlBuildConfig,
     WORKSPACE_PUBLIC_DIR_NAME,
+    _query_nodes_from_source,
     build_page_head_title,
-    build_typst_inputs,
-    compile_and_build_html,
-    extract_first_description_sentence,
-    extract_declared_typst_string,
-    extract_required_declared_typst_string,
+    compile_html,
+    first_desc,
+    decl_str,
+    need_decl_str,
     extract_typst_links,
-    find_latest_revision,
+    prev_rev,
     make_temp_dir,
-    minify_html_file,
-    reset_directory,
+    make_inputs,
+    minify_html,
+    reset_dir,
     safe_join_child,
     sources_hash,
 )
@@ -132,11 +133,10 @@ def _replace_required_pattern(
     html_content: str,
     pattern: str,
     replacement: str,
-    label: str,
 ) -> str:
     updated_html, replaced = re.subn(pattern, replacement, html_content, count=1)
     if replaced != 1:
-        raise RuntimeError(f"Expected exactly one {label} tag in article HTML.")
+        raise RuntimeError("Expected exactly one replacement match in article HTML.")
     return updated_html
 
 
@@ -147,10 +147,10 @@ def _finalize_article_metadata(
     hidden_text: str,
 ) -> None:
     final_title = build_page_head_title(post_title, _SITE_TITLE, post_subtitle)
-    fallback_description = post_subtitle or post_title
-    meta_description = extract_first_description_sentence(
+    fallback_desc = post_subtitle or post_title
+    meta_description = first_desc(
         hidden_text,
-        fallback_description,
+        fallback_desc,
         skip_texts=[post_subtitle] if post_subtitle else None,
     )
 
@@ -159,31 +159,27 @@ def _finalize_article_metadata(
 
     escaped_title = html.escape(final_title, quote=True)
     escaped_title_text = html.escape(final_title)
-    escaped_description = html.escape(meta_description, quote=True)
+    escaped_desc = html.escape(meta_description, quote=True)
 
     html_content = _replace_required_pattern(
         html_content,
         r'<meta name="description" content="[^"]*">',
-        f'<meta name="description" content="{escaped_description}">',
-        "description",
+        f'<meta name="description" content="{escaped_desc}">',
     )
     html_content = _replace_required_pattern(
         html_content,
         r'<meta property="og:title" content="[^"]*">',
         f'<meta property="og:title" content="{escaped_title}">',
-        "og:title",
     )
     html_content = _replace_required_pattern(
         html_content,
         r'<meta property="og:description" content="[^"]*">',
-        f'<meta property="og:description" content="{escaped_description}">',
-        "og:description",
+        f'<meta property="og:description" content="{escaped_desc}">',
     )
     html_content = _replace_required_pattern(
         html_content,
         r"<title>.*?</title>",
         f"<title>{escaped_title_text}</title>",
-        "title",
     )
 
     with open(index_path, "w", encoding="utf-8") as f:
@@ -239,7 +235,7 @@ def _resolve_compile_output_dirs(
         else:
             html_output_dir = os.path.abspath(str(html_output_dir_override))
         output_dir = safe_join_child(html_output_dir, "assets")
-        reset_directory(html_output_dir)
+        reset_dir(html_output_dir)
     else:
         output_dir = os.path.abspath(str(output_dir_override))
         html_output_dir = (
@@ -247,7 +243,7 @@ def _resolve_compile_output_dirs(
             if html_output_dir_override is not None
             else os.path.dirname(output_dir)
         )
-        reset_directory(output_dir)
+        reset_dir(output_dir)
 
     public_output_dir = (
         os.path.abspath(str(public_output_dir_override))
@@ -282,16 +278,16 @@ def run_compile(args: Namespace) -> None:
         )
 
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        asset_context = build_driver_asset_context(base_dir, args.root_dir)
+        asset_context = build_asset_ctx(base_dir, args.root_dir)
         compile_sources = _prepare_compile_sources(
             base_dir,
             workspace_path,
         )
-        post_title = extract_required_declared_typst_string(
+        post_title = need_decl_str(
             compile_sources.main_typ_path,
             "title",
         )
-        post_subtitle = extract_declared_typst_string(
+        post_subtitle = decl_str(
             compile_sources.main_typ_path, "subtitle"
         )
 
@@ -303,21 +299,21 @@ def run_compile(args: Namespace) -> None:
             edited_date = getattr(
                 args, "edited_date_override", None
             ) or _workspace_latest_modified_date(workspace_path)
-        last_revision_date, last_revision_url = find_latest_revision(
+        last_revision_date, last_revision_url = prev_rev(
             posts_dir,
             workspace_name,
             skip_latest=skip_latest,
         )
-        shared_typst_inputs: Dict[str, str] = {}
+        shared_inputs: Dict[str, str] = {}
         if publish_date:
-            shared_typst_inputs["publish_date"] = publish_date
+            shared_inputs["publish_date"] = publish_date
         if edited_date:
-            shared_typst_inputs["edited_date"] = edited_date
+            shared_inputs["edited_date"] = edited_date
         if last_revision_date and last_revision_url:
-            shared_typst_inputs["last_revision_date"] = last_revision_date
-            shared_typst_inputs["last_revision_url"] = last_revision_url
-        typst_inputs = build_typst_inputs(
-            shared_inputs=shared_typst_inputs or None,
+            shared_inputs["last_revision_date"] = last_revision_date
+            shared_inputs["last_revision_url"] = last_revision_url
+        typst_inputs = make_inputs(
+            shared_inputs=shared_inputs or None,
         )
 
         source_links = extract_typst_links(
@@ -326,19 +322,17 @@ def run_compile(args: Namespace) -> None:
         )
 
         print("Compiling Typst project...", file=sys.stderr)
-        enable_shared_glyph_extraction = bool(
-            getattr(args, "enable_shared_glyph_extraction", True)
-        )
+        shared_glyphs = bool(getattr(args, "shared_glyphs", True))
         base_url = resolve_base_url(args)
-        og_url = build_public_page_url(
+        og_url = page_url(
             base_url=base_url,
             root_dir=args.root_dir,
             dest_dir=output_dirs.html_output_dir,
             html_filename="index.html",
         )
-        initial_hidden_text = ""
+        hidden_text = ""
         pdf_href = f"./assets/post.{compile_sources.asset_hash}.pdf"
-        compile_and_build_html(
+        compile_html(
             CompileBuildRequest(
                 source_bytes=compile_sources.driver_source_bytes,
                 output_dir=output_dirs.asset_output_dir,
@@ -352,28 +346,34 @@ def run_compile(args: Namespace) -> None:
                     default_title=post_title,
                     asset_context=asset_context,
                     description=post_subtitle,
-                    hidden_text_override=initial_hidden_text,
+                    hidden_text_override=hidden_text,
                     extract_title_from_pdf=True,
                     svg_href_rewrites={"post.pdf": pdf_href},
                     asset_dest_dir=output_dirs.asset_output_dir,
                     og_type="article",
                     og_url=og_url,
-                    enable_shared_glyph_extraction=enable_shared_glyph_extraction,
+                    shared_glyphs=shared_glyphs,
                     image_source_dir=workspace_path,
                     site_base_url=base_url,
                 ),
             )
         )
 
-        final_hidden_text_override = build_final_hidden_text(
-            compile_sources.driver_source_bytes,
-            os.getcwd(),
-            typst_inputs.svg,
+        doc_elements = [
+            value
+            for node in _query_nodes_from_source(
+                source_content=compile_sources.driver_source_bytes,
+                query_root=os.getcwd(),
+                selector="<driver-doc>",
+                inputs=typst_inputs.svg,
+            )
+            if isinstance((value := node.get("value")), dict)
+        ]
+        final_hidden_text = build_hidden_text(
+            doc_elements,
             post_title,
             post_subtitle,
             compile_sources.asset_hash,
-            last_revision_date,
-            last_revision_url,
             nav_links=[
                 ("../../../index.html", "Contents"),
                 ("meta.html", "Meta"),
@@ -385,16 +385,16 @@ def run_compile(args: Namespace) -> None:
         index_path = os.path.join(output_dirs.html_output_dir, "index.html")
         replace_hidden_block(
             index_path=index_path,
-            old_hidden_text=initial_hidden_text,
-            new_hidden_text=final_hidden_text_override,
+            old_hidden_text=hidden_text,
+            new_hidden_text=final_hidden_text,
         )
         _finalize_article_metadata(
             index_path=index_path,
             post_title=post_title,
             post_subtitle=post_subtitle,
-            hidden_text=final_hidden_text_override,
+            hidden_text=final_hidden_text,
         )
-        minify_html_file(index_path)
+        minify_html(index_path)
 
         copied_files = _copy_workspace_public_files(
             workspace_path, output_dirs.public_output_dir

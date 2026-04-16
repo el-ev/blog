@@ -7,7 +7,6 @@ from typing import Any, Dict, List, Optional, Tuple
 from .utils import (
     _extract_typst_table_rows,
     _flatten_query_text,
-    extract_doc_structure_from_content,
     make_raw_copy_id,
 )
 
@@ -166,8 +165,6 @@ def build_hidden_text(
     post_title: str,
     post_subtitle: Optional[str],
     asset_hash: str,
-    last_revision_date: Optional[str],
-    last_revision_url: Optional[str],
     nav_links: Optional[List[Tuple[str, str]]] = None,
     source_links: Optional[List[Tuple[str, str]]] = None,
 ) -> str:
@@ -392,30 +389,3 @@ def replace_hidden_block(
     html_content = html_content.replace(old_hidden, new_hidden)
     with open(index_path, "w", encoding="utf-8") as f:
         f.write(html_content)
-
-
-def build_final_hidden_text(
-    driver_source_content: bytes,
-    query_root: str,
-    typst_inputs: Optional[Dict[str, str]],
-    post_title: str,
-    post_subtitle: Optional[str],
-    asset_hash: str,
-    last_revision_date: Optional[str],
-    last_revision_url: Optional[str],
-    nav_links: Optional[List[Tuple[str, str]]] = None,
-    source_links: Optional[List[Tuple[str, str]]] = None,
-) -> str:
-    doc_elements = extract_doc_structure_from_content(
-        driver_source_content, query_root, typst_inputs
-    )
-    return build_hidden_text(
-        doc_elements,
-        post_title,
-        post_subtitle,
-        asset_hash,
-        last_revision_date,
-        last_revision_url,
-        nav_links,
-        source_links,
-    )

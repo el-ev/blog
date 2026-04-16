@@ -3,19 +3,10 @@ import sys
 from typing import List, Set, Tuple
 
 from .post_entries import is_internal_post_entry
-from .revisions import find_latest_workspace_revision, parse_workspace_revision_entry
-from .submission_workspace import resolve_existing_post_metadata
+from .revisions import latest_rev, parse_revision
+from .submission_workspace import resolve_post_meta
 
-def find_latest_revision_entry(
-    posts_dir: str, workspace_name: str
-) -> Tuple[str, str, int]:
-    latest = find_latest_workspace_revision(posts_dir, workspace_name)
-    if latest is None:
-        raise FileNotFoundError(f"No revisions found for workspace '{workspace_name}'.")
-    return latest.date, latest.entry_name, latest.revision
-
-
-def resolve_new_revision_name(date_dir: str, workspace_name: str) -> Tuple[int, str]:
+def next_revision_name(date_dir: str, workspace_name: str) -> Tuple[int, str]:
     os.makedirs(date_dir, exist_ok=True)
 
     existing_dirs: List[int] = []
@@ -24,7 +15,7 @@ def resolve_new_revision_name(date_dir: str, workspace_name: str) -> Tuple[int, 
             continue
         try:
             existing_dirs.append(
-                parse_workspace_revision_entry(entry_name, workspace_name)
+                parse_revision(entry_name, workspace_name)
             )
         except ValueError:
             continue
@@ -36,33 +27,29 @@ def resolve_new_revision_name(date_dir: str, workspace_name: str) -> Tuple[int, 
     return target_rev, f"{workspace_name}-{target_rev}"
 
 
-def resolve_submission_destination(
+def resolve_submit_dest(
     posts_dir: str,
     workspace_name: str,
     amend_mode: bool,
     today_str: str,
 ) -> Tuple[str, str, int, bool]:
     if amend_mode:
-        try:
-            date_str, dest_dir_name, target_rev = find_latest_revision_entry(
-                posts_dir,
-                workspace_name,
-            )
-            return date_str, dest_dir_name, target_rev, True
-        except FileNotFoundError:
+        latest = latest_rev(posts_dir, workspace_name)
+        if latest is None:
             print(
                 f"No existing revision found for '{workspace_name}'. "
                 "Creating a new revision instead of amending."
             )
             return today_str, workspace_name, 0, False
+        return latest.date, latest.entry_name, latest.revision, True
 
     date_str = today_str
     date_dir = os.path.join(posts_dir, date_str)
-    target_rev, dest_dir_name = resolve_new_revision_name(date_dir, workspace_name)
+    target_rev, dest_dir_name = next_revision_name(date_dir, workspace_name)
     return date_str, dest_dir_name, target_rev, False
 
 
-def collect_published_workspaces(posts_dir: str) -> List[str]:
+def published_workspaces(posts_dir: str) -> List[str]:
     workspaces: Set[str] = set()
     if not os.path.isdir(posts_dir):
         return []
@@ -95,9 +82,8 @@ def collect_published_workspaces(posts_dir: str) -> List[str]:
                 continue
 
             try:
-                workspace_name, _, _ = resolve_existing_post_metadata(
+                workspace_name, _, _ = resolve_post_meta(
                     post_dir=post_dir,
-                    date_str=date_str,
                     entry_name=entry_name,
                 )
             except (FileNotFoundError, KeyError, ValueError) as exc:

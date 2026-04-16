@@ -13,7 +13,7 @@ class WorkspaceRevision:
     path: str
 
 
-def parse_workspace_revision_entry(entry_name: str, workspace_name: str) -> int:
+def parse_revision(entry_name: str, workspace_name: str) -> int:
     if entry_name == workspace_name:
         return 0
 
@@ -24,9 +24,7 @@ def parse_workspace_revision_entry(entry_name: str, workspace_name: str) -> int:
     return int(suffix)
 
 
-def list_workspace_revisions(
-    posts_dir: str, workspace_name: str
-) -> List[WorkspaceRevision]:
+def list_revisions(posts_dir: str, workspace_name: str) -> List[WorkspaceRevision]:
     if not os.path.isdir(posts_dir):
         return []
 
@@ -45,7 +43,7 @@ def list_workspace_revisions(
                 continue
 
             try:
-                revision = parse_workspace_revision_entry(entry_name, workspace_name)
+                revision = parse_revision(entry_name, workspace_name)
             except ValueError:
                 continue
 
@@ -64,11 +62,8 @@ def list_workspace_revisions(
     return revisions
 
 
-def find_latest_workspace_revision(
-    posts_dir: str,
-    workspace_name: str,
-) -> Optional[WorkspaceRevision]:
-    revisions = list_workspace_revisions(posts_dir, workspace_name)
+def latest_rev(posts_dir: str, workspace_name: str) -> Optional[WorkspaceRevision]:
+    revisions = list_revisions(posts_dir, workspace_name)
     if not revisions:
         return None
     return revisions[0]

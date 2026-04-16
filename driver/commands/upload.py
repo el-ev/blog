@@ -41,7 +41,7 @@ def _scan_local_files(
     return local_paths, local_md5, local_by_folder
 
 
-def _scan_remote_files(
+def _scan_remote(
     client: Any, bucket_name: str, prefix: str
 ) -> Tuple[Dict[str, Any], Dict[str, Set[str]]]:
     remote_by_rel: Dict[str, Any] = {}
@@ -61,7 +61,7 @@ def _scan_remote_files(
     return remote_by_rel, remote_by_folder
 
 
-def _bucket_worker_count(task_count: int) -> int:
+def _worker_count(task_count: int) -> int:
     if task_count <= 1:
         return 1
     cpu_count = os.cpu_count() or 1
@@ -81,7 +81,7 @@ def _delete_blob(task: Tuple[Any, str]) -> str:
     return blob_name
 
 
-def _upload_changed_files(
+def _upload_changes(
     bucket: Any,
     prefix: str,
     local_paths: Dict[str, str],
@@ -89,7 +89,7 @@ def _upload_changed_files(
     remote_by_rel: Dict[str, Any],
 ) -> Tuple[int, int]:
     upload_tasks: List[Tuple[Any, str, str]] = []
-    skipped_files_count = 0
+    skip_count = 0
 
     for rel_path in sorted(local_paths.keys()):
         local_path = local_paths[rel_path]
@@ -97,24 +97,22 @@ def _upload_changed_files(
         remote_blob = remote_by_rel[rel_path] if rel_path in remote_by_rel else None
         remote_md5 = remote_blob.md5_hash if remote_blob else None
         if remote_md5 and remote_md5 == local_md5[rel_path]:
-            skipped_files_count += 1
+            skip_count += 1
             continue
 
         upload_tasks.append((bucket, blob_name, local_path))
 
     if not upload_tasks:
-        return 0, skipped_files_count
+        return 0, skip_count
 
-    with ThreadPoolExecutor(
-        max_workers=_bucket_worker_count(len(upload_tasks))
-    ) as executor:
+    with ThreadPoolExecutor(max_workers=_worker_count(len(upload_tasks))) as executor:
         for blob_name in executor.map(_upload_blob, upload_tasks):
             print(f"Uploaded: {blob_name}")
 
-    return len(upload_tasks), skipped_files_count
+    return len(upload_tasks), skip_count
 
 
-def _folders_needing_cleanup(
+def _cleanup_folders(
     local_by_folder: Dict[str, Set[str]],
     remote_by_folder: Dict[str, Set[str]],
 ) -> Set[str]:
@@ -126,7 +124,7 @@ def _folders_needing_cleanup(
     return folders
 
 
-def _delete_stale_assets(
+def _delete_stale(
     bucket: Any,
     prefix: str,
     local_by_folder: Dict[str, Set[str]],
@@ -135,7 +133,7 @@ def _delete_stale_assets(
 ) -> int:
     stale_blobs: List[Tuple[Any, str]] = []
 
-    for folder in sorted(_folders_needing_cleanup(local_by_folder, remote_by_folder)):
+    for folder in sorted(_cleanup_folders(local_by_folder, remote_by_folder)):
         local_files = local_by_folder[folder] if folder in local_by_folder else set()
         remote_files = remote_by_folder[folder] if folder in remote_by_folder else set()
         stale_files = sorted(remote_files - local_files)
@@ -151,9 +149,7 @@ def _delete_stale_assets(
     if not stale_blobs:
         return 0
 
-    with ThreadPoolExecutor(
-        max_workers=_bucket_worker_count(len(stale_blobs))
-    ) as executor:
+    with ThreadPoolExecutor(max_workers=_worker_count(len(stale_blobs))) as executor:
         for blob_name in executor.map(_delete_blob, stale_blobs):
             print(f"Deleted stale asset: {blob_name}")
 
@@ -168,7 +164,7 @@ def run_upload(args: Namespace) -> None:
         sys.exit(1)
 
     config_path: str = getattr(args, "config", "")
-    config_data = load_config_data(config_path, warn_to_stderr=True)
+    config_data = load_config_data(config_path)
 
     bucket_arg = getattr(args, "bucket", None)
     if bucket_arg is not None:
@@ -213,16 +209,16 @@ def run_upload(args: Namespace) -> None:
         sys.exit(1)
 
     local_paths, local_md5, local_by_folder = _scan_local_files(root_dir)
-    remote_by_rel, remote_by_folder = _scan_remote_files(client, bucket_name, prefix)
+    remote_by_rel, remote_by_folder = _scan_remote(client, bucket_name, prefix)
 
-    uploaded_files_count, skipped_files_count = _upload_changed_files(
+    upload_count, skip_count = _upload_changes(
         bucket=bucket,
         prefix=prefix,
         local_paths=local_paths,
         local_md5=local_md5,
         remote_by_rel=remote_by_rel,
     )
-    deleted_files_count = _delete_stale_assets(
+    delete_count = _delete_stale(
         bucket=bucket,
         prefix=prefix,
         local_by_folder=local_by_folder,
@@ -231,7 +227,7 @@ def run_upload(args: Namespace) -> None:
     )
 
     print(
-        f"Upload complete. {uploaded_files_count} uploaded, "
-        f"{skipped_files_count} skipped (unchanged), "
-        f"{deleted_files_count} stale assets deleted."
+        f"Upload complete. {upload_count} uploaded, "
+        f"{skip_count} skipped (unchanged), "
+        f"{delete_count} stale assets deleted."
     )

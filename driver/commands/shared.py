@@ -8,15 +8,15 @@ from .utils import (
     WEB_ASSETS_DIR_NAME,
     GLOBAL_GLYPH_ASSET_FILENAME,
     GLOBAL_GLYPH_MAP_FILENAME,
-    build_driver_web_assets,
-    apply_global_glyph_mapping,
-    cleanup_legacy_glyph_assets,
-    rewrite_glyph_preload_href,
+    apply_glyph_map,
+    build_web_assets,
+    clean_glyph_assets,
+    rewrite_glyph_preload,
 )
 
 
-def build_driver_asset_context(driver_dir: str, root_dir: str) -> DriverAssetContext:
-    web_assets = build_driver_web_assets(driver_dir, root_dir)
+def build_asset_ctx(driver_dir: str, root_dir: str) -> DriverAssetContext:
+    web_assets = build_web_assets(driver_dir, root_dir)
     assets_dir = os.path.join(root_dir, WEB_ASSETS_DIR_NAME)
     return DriverAssetContext(
         web_assets=web_assets,
@@ -25,18 +25,18 @@ def build_driver_asset_context(driver_dir: str, root_dir: str) -> DriverAssetCon
     )
 
 
-def refresh_glyph_assets(
+def refresh_glyphs(
     root_dir: str,
     target_dirs: List[str],
     clean_global_store: bool = False,
 ) -> None:
-    glyph_asset_path = apply_global_glyph_mapping(
+    glyph_asset_path = apply_glyph_map(
         root_dir=root_dir,
         target_dirs=target_dirs,
     )
 
     if glyph_asset_path:
-        candidate_html_paths = {
+        html_paths = {
             os.path.join(root_dir, "index.html"),
         }
 
@@ -46,20 +46,19 @@ def refresh_glyph_assets(
             for filename in os.listdir(directory):
                 if not filename.endswith(".html"):
                     continue
-                candidate_html_paths.add(os.path.join(directory, filename))
+                html_paths.add(os.path.join(directory, filename))
 
-        for html_path in sorted(candidate_html_paths):
-            rewrite_glyph_preload_href(html_path, glyph_asset_path)
+        for html_path in sorted(html_paths):
+            rewrite_glyph_preload(html_path, glyph_asset_path)
 
-    cleanup_legacy_glyph_assets(
+    clean_glyph_assets(
         root_dir=root_dir,
         target_dirs=target_dirs,
         clean_global_store=clean_global_store,
     )
 
 
-def load_config_data(config_path: str, warn_to_stderr: bool = False) -> Dict[str, Any]:
-    _ = warn_to_stderr
+def load_config_data(config_path: str) -> Dict[str, Any]:
     if not config_path or not os.path.isfile(config_path):
         return {}
 
@@ -87,7 +86,7 @@ def resolve_base_url(args: Any) -> str:
     return str(base_url_raw).rstrip("/")
 
 
-def build_public_page_url(
+def page_url(
     base_url: str,
     root_dir: str,
     dest_dir: str,

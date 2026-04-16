@@ -10,10 +10,10 @@ from .utils import (
     CompileBuildRequest,
     DriverAssetContext,
     HtmlBuildConfig,
-    build_typst_inputs,
-    compile_and_build_html,
-    hash_text_with_sources,
+    compile_html,
+    hash_text_with_paths,
     make_raw_copy_id,
+    make_inputs,
     make_temp_dir,
 )
 
@@ -48,14 +48,12 @@ class MetaPageRequest:
 
 def extract_post_pdf_name(post_dir: str) -> Tuple[str, str]:
     asset_dir = os.path.join(post_dir, "assets")
-    if not os.path.isdir(asset_dir):
-        raise RuntimeError(f"Compiled post assets not found in '{post_dir}'.")
-
-    for filename in sorted(os.listdir(asset_dir)):
-        if not re.match(r"^post\.[^.]+\.pdf$", filename):
-            continue
-        return f"assets/{filename}", filename[len("post.") : -len(".pdf")]
-    raise RuntimeError(f"Compiled post PDF not found in '{asset_dir}'.")
+    filename = next(
+        filename
+        for filename in sorted(os.listdir(asset_dir))
+        if re.match(r"^post\.[^.]+\.pdf$", filename)
+    )
+    return f"assets/{filename}", filename[len("post.") : -len(".pdf")]
 
 
 def build_meta_fields(request: MetaFieldsRequest) -> Dict[str, str]:
@@ -91,7 +89,7 @@ def _build_meta_typst_source(
     meta_fields: Dict[str, str],
     source_files: List[str],
 ) -> str:
-    markup_placeholders = {
+    placeholders = {
         "{{POST_TITLE}}": "Post Title",
         "{{PUBLISH_DATE}}": "Publish Date",
         "{{REVISION}}": "Revision",
@@ -106,7 +104,7 @@ def _build_meta_typst_source(
         placeholder: (
             f'#raw("{_escape_typst_string(meta_fields[field_name])}", block: false)'
         )
-        for placeholder, field_name in markup_placeholders.items()
+        for placeholder, field_name in placeholders.items()
     }
     post_subtitle = (
         meta_fields["Post Subtitle"] if "Post Subtitle" in meta_fields else None
@@ -158,12 +156,12 @@ def _build_meta_hidden_text(
 
 
 def compile_meta_page(request: MetaPageRequest) -> None:
-    meta_template_path = os.path.join(request.base_dir, "meta.template.typ")
-    with open(meta_template_path, "r", encoding="utf-8") as f:
-        meta_template_source = f.read()
+    template_path = os.path.join(request.base_dir, "meta.template.typ")
+    with open(template_path, "r", encoding="utf-8") as f:
+        template_source = f.read()
 
     meta_source = _build_meta_typst_source(
-        template_source=meta_template_source,
+        template_source=template_source,
         meta_fields=request.meta_fields,
         source_files=request.workspace_files,
     )
@@ -171,16 +169,16 @@ def compile_meta_page(request: MetaPageRequest) -> None:
         request.meta_fields, request.workspace_files
     )
     template_typ_path = os.path.join(request.base_dir, "template.typ")
-    meta_hash = hash_text_with_sources(
+    meta_hash = hash_text_with_paths(
         meta_source,
         [template_typ_path],
     )
 
-    typst_inputs = build_typst_inputs(shared_inputs={"back_href": "index.html"})
+    typst_inputs = make_inputs(shared_inputs={"back_href": "index.html"})
 
     meta_output_dir = make_temp_dir(request.build_base, prefix=".meta-build-")
     try:
-        compile_and_build_html(
+        compile_html(
             CompileBuildRequest(
                 source_bytes=meta_source.encode("utf-8"),
                 output_dir=meta_output_dir,
@@ -200,7 +198,7 @@ def compile_meta_page(request: MetaPageRequest) -> None:
                     asset_dest_dir=request.asset_dir,
                     og_type="article",
                     og_url=request.og_url,
-                    enable_shared_glyph_extraction=False,
+                    shared_glyphs=False,
                     site_base_url=request.site_base_url,
                 ),
             )

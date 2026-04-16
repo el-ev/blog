@@ -8,22 +8,22 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from .shared import (
-    build_public_page_url,
-    build_driver_asset_context,
-    refresh_glyph_assets,
+    page_url,
+    build_asset_ctx,
+    refresh_glyphs,
     resolve_base_url,
 )
 from .post_entries import is_internal_post_entry
 from .utils import (
     CompileBuildRequest,
     HtmlBuildConfig,
-    build_typst_inputs,
-    reset_directory,
-    compile_and_build_html,
-    extract_first_description_sentence,
-    extract_required_declared_typst_string_from_source,
-    hash_text_with_sources,
-    minify_html_file,
+    compile_html,
+    first_desc,
+    hash_text_with_paths,
+    make_inputs,
+    minify_html,
+    need_decl_str_from_source,
+    reset_dir,
 )
 
 
@@ -50,10 +50,6 @@ def _collect_day_posts(date_dir: str, date_str: str) -> List[PostEntry]:
             continue
 
         post_json_path = os.path.join(post_path, "post.json")
-        if not os.path.isfile(post_json_path):
-            raise RuntimeError(
-                f"Missing post.json in '{post_path}'. Run 'amend-all' to regenerate."
-            )
         with open(post_json_path, "r", encoding="utf-8") as _f:
             post_data = json.load(_f)
         title = _append_revision_suffix(post_dir_name, post_data["title"])
@@ -196,15 +192,15 @@ def update_content(args: Namespace) -> None:
     posts_by_date = _collect_posts_by_date(dest_base_dir)
 
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    content_template_path = os.path.join(base_dir, "content.template.typ")
-    with open(content_template_path, "r", encoding="utf-8") as f:
+    template_path = os.path.join(base_dir, "content.template.typ")
+    with open(template_path, "r", encoding="utf-8") as f:
         content_template = f.read()
 
-    parsed_title = extract_required_declared_typst_string_from_source(
+    parsed_title = need_decl_str_from_source(
         content_template,
         "title",
     )
-    parsed_subtitle = extract_required_declared_typst_string_from_source(
+    parsed_subtitle = need_decl_str_from_source(
         content_template, "subtitle"
     )
 
@@ -218,20 +214,20 @@ def update_content(args: Namespace) -> None:
     content_source = content_template.replace("{{POSTS}}", "\n".join(posts_typst_lines))
     hidden_text = _build_hidden_text(parsed_title, parsed_subtitle, posts_by_date)
     page_title = parsed_title
-    page_description = extract_first_description_sentence(hidden_text, parsed_subtitle)
+    page_description = first_desc(hidden_text, parsed_subtitle)
 
     output_dir = os.path.join(args.build_base, "content")
-    reset_directory(output_dir)
+    reset_dir(output_dir)
 
     template_typ_path = os.path.join(base_dir, "template.typ")
-    asset_hash = hash_text_with_sources(
+    asset_hash = hash_text_with_paths(
         content_source,
         [template_typ_path],
     )
 
-    content_source_bytes = content_source.encode()
-    template_path = os.path.join(base_dir, "index.template.html")
-    typst_inputs = build_typst_inputs(
+    source_bytes = content_source.encode()
+    html_template = os.path.join(base_dir, "index.template.html")
+    typst_inputs = make_inputs(
         shared_inputs={"back_href": "./index.html"},
     )
 
@@ -240,24 +236,24 @@ def update_content(args: Namespace) -> None:
     robots_path = os.path.join(root_dir, "robots.txt")
     shutil.copy2(os.path.join(base_dir, "robots.txt"), robots_path)
     content_asset_dir = os.path.join(root_dir, "assets")
-    asset_context = build_driver_asset_context(base_dir, root_dir)
+    asset_context = build_asset_ctx(base_dir, root_dir)
     base_url = resolve_base_url(args)
-    og_url = build_public_page_url(
+    og_url = page_url(
         base_url=base_url,
         root_dir=root_dir,
         dest_dir=root_dir,
         html_filename="index.html",
     )
 
-    compile_and_build_html(
+    compile_html(
         CompileBuildRequest(
-            source_bytes=content_source_bytes,
+            source_bytes=source_bytes,
             output_dir=output_dir,
             asset_hash=asset_hash,
             file_prefix="content",
             typst_inputs=typst_inputs,
             html=HtmlBuildConfig(
-                template_path=template_path,
+                template_path=html_template,
                 dest_dir=root_dir,
                 title_format="Blog Content Page {i}",
                 default_title=page_title,
@@ -292,12 +288,12 @@ def update_content(args: Namespace) -> None:
             if os.path.isdir(source_dir):
                 glyph_target_dirs.append(source_dir)
 
-    refresh_glyph_assets(
+    refresh_glyphs(
         root_dir=root_dir,
         target_dirs=glyph_target_dirs,
         clean_global_store=True,
     )
-    minify_html_file(os.path.join(root_dir, "index.html"))
+    minify_html(os.path.join(root_dir, "index.html"))
 
     sitemap_lines = _build_sitemap_lines(base_url, posts_by_date)
     rss_lines = _build_rss_lines(

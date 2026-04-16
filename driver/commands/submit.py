@@ -10,15 +10,15 @@ from typing import Any, Dict, List, Optional, Tuple
 from .compile import run_compile
 from .content import update_content
 from .shared import (
-    build_driver_asset_context,
-    build_public_page_url,
-    refresh_glyph_assets,
+    build_asset_ctx,
+    page_url,
+    refresh_glyphs,
     resolve_base_url,
 )
+from .revisions import latest_rev
 from .submission_flow import (
-    collect_published_workspaces,
-    find_latest_revision_entry,
-    resolve_submission_destination,
+    published_workspaces,
+    resolve_submit_dest,
 )
 from .submission_meta import (
     MetaFieldsRequest,
@@ -28,19 +28,19 @@ from .submission_meta import (
     extract_post_pdf_name,
 )
 from .submission_workspace import (
-    collect_relative_files,
-    load_manifest_data,
-    resolve_existing_post_metadata,
-    sync_snapshot_from_workspace,
-    stage_workspace_if_needed,
-    write_workspace_manifest,
+    collect_files,
+    load_manifest,
+    resolve_post_meta,
+    stage_workspace,
+    sync_snapshot,
+    write_manifest,
 )
 from .utils import (
-    extract_declared_typst_string,
-    extract_first_description_sentence,
-    extract_required_declared_typst_string,
+    decl_str,
+    first_desc,
+    need_decl_str,
     make_temp_dir,
-    minify_html_file,
+    minify_html,
     safe_join_child,
 )
 
@@ -84,22 +84,22 @@ def _submit_to_destination(
     dest_dir = os.path.join(dest_base_dir, dest_dir_name)
     dest_assets_dir = os.path.join(dest_dir, "assets")
 
-    existing_post_json: Dict[str, Any] = {}
-    existing_manifest_data: Dict[str, Any] = {}
+    post_json: Dict[str, Any] = {}
+    manifest: Dict[str, Any] = {}
     if amend_mode and os.path.isdir(dest_dir):
         _post_json_path = os.path.join(dest_dir, "post.json")
         if os.path.isfile(_post_json_path):
             with open(_post_json_path, "r", encoding="utf-8") as _f:
-                existing_post_json = json.load(_f)
-        existing_manifest_data = load_manifest_data(os.path.join(dest_dir, "source"))
+                post_json = json.load(_f)
+        manifest = load_manifest(os.path.join(dest_dir, "source"))
 
-    staged_workspace_path, temp_root = stage_workspace_if_needed(
+    stage_path, temp_root = stage_workspace(
         workspace_path, dest_dir, args.build_base
     )
     backup_root: Optional[str] = None
     backup_dir: Optional[str] = None
     try:
-        workspace_files = collect_relative_files(staged_workspace_path)
+        workspace_files = collect_files(stage_path)
         backup_root, backup_dir = _backup_existing_destination(
             build_base=args.build_base,
             dest_dir=dest_dir,
@@ -109,28 +109,28 @@ def _submit_to_destination(
         compile_args = Namespace(**vars(args))
         compile_args.name = workspace_name
         compile_args.amend = amend_mode
-        compile_args.workspace_path_override = staged_workspace_path
+        compile_args.workspace_path_override = stage_path
         compile_args.publish_date_override = date_str
-        compile_args.enable_shared_glyph_extraction = False
+        compile_args.shared_glyphs = False
         compile_args.output_dir_override = dest_assets_dir
         compile_args.html_output_dir_override = dest_dir
         compile_args.public_output_dir_override = dest_dir
         run_compile(compile_args)
 
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        asset_context = build_driver_asset_context(base_dir, args.root_dir)
+        asset_context = build_asset_ctx(base_dir, args.root_dir)
 
         source_dest_dir = os.path.join(dest_dir, "source")
-        sync_snapshot_from_workspace(staged_workspace_path, source_dest_dir)
+        sync_snapshot(stage_path, source_dest_dir)
 
-        main_typ_path = os.path.join(staged_workspace_path, "main.typ")
-        post_title = extract_required_declared_typst_string(main_typ_path, "title")
-        post_subtitle = extract_declared_typst_string(main_typ_path, "subtitle")
+        main_typ_path = os.path.join(stage_path, "main.typ")
+        post_title = need_decl_str(main_typ_path, "title")
+        post_subtitle = decl_str(main_typ_path, "subtitle")
         pdf_name, post_asset_hash = extract_post_pdf_name(dest_dir)
 
         meta_generated_at: Optional[str] = None
-        if amend_mode and existing_post_json.get("source_hash") == post_asset_hash:
-            meta_generated_at = existing_post_json.get("generated_at")
+        if amend_mode and post_json.get("source_hash") == post_asset_hash:
+            meta_generated_at = post_json.get("generated_at")
 
         meta_fields = build_meta_fields(
             MetaFieldsRequest(
@@ -147,7 +147,7 @@ def _submit_to_destination(
             )
         )
         base_url = resolve_base_url(args)
-        meta_og_url = build_public_page_url(
+        meta_og_url = page_url(
             base_url=base_url,
             root_dir=args.root_dir,
             dest_dir=dest_dir,
@@ -171,7 +171,7 @@ def _submit_to_destination(
         index_html_path = os.path.join(dest_dir, "index.html")
         with open(index_html_path, "r", encoding="utf-8") as _f:
             index_html = _f.read()
-        description = extract_first_description_sentence(
+        description = first_desc(
             index_html,
             post_title,
             skip_texts=[post_subtitle] if post_subtitle else None,
@@ -190,24 +190,24 @@ def _submit_to_destination(
                 indent=2,
             )
 
-        write_workspace_manifest(
+        write_manifest(
             manifest_path=os.path.join(source_dest_dir, ".workspace-manifest.json"),
             workspace_name=workspace_name,
             publish_date=date_str,
             revision_name=dest_dir_name,
             files=workspace_files,
-            generated_at=existing_manifest_data["generated_at"] if amend_mode else None,
+            generated_at=manifest["generated_at"] if amend_mode else None,
         )
 
         if refresh_assets:
-            refresh_glyph_assets(
+            refresh_glyphs(
                 root_dir=args.root_dir,
                 target_dirs=[dest_dir, dest_assets_dir, source_dest_dir],
             )
 
         for _html_name in os.listdir(dest_dir):
             if _html_name.endswith(".html"):
-                minify_html_file(os.path.join(dest_dir, _html_name))
+                minify_html(os.path.join(dest_dir, _html_name))
     except Exception:
         _restore_destination_backup(dest_dir, backup_dir)
         raise
@@ -225,14 +225,12 @@ def run_submit(args: Namespace) -> None:
     today_str = datetime.now().strftime("%Y-%m-%d")
     amend_mode = getattr(args, "amend", False)
 
-    date_str, dest_dir_name, target_rev, did_amend_existing = (
-        resolve_submission_destination(
+    date_str, dest_dir_name, target_rev, did_amend = resolve_submit_dest(
             posts_dir=posts_dir,
             workspace_name=workspace_name,
             amend_mode=amend_mode,
             today_str=today_str,
         )
-    )
 
     _submit_to_destination(
         args=args,
@@ -241,10 +239,10 @@ def run_submit(args: Namespace) -> None:
         date_str=date_str,
         dest_dir_name=dest_dir_name,
         target_rev=target_rev,
-        amend_mode=did_amend_existing,
+        amend_mode=did_amend,
     )
 
-    if did_amend_existing:
+    if did_amend:
         print(
             f"Amended '{workspace_name}' in '{os.path.join(posts_dir, date_str, dest_dir_name)}'"
         )
@@ -261,9 +259,13 @@ def _amend_latest_workspace(
     posts_dir: str,
     workspace_name: str,
 ) -> Optional[Tuple[str, str, str]]:
-    date_str, dest_dir_name, target_rev = find_latest_revision_entry(
-        posts_dir,
-        workspace_name,
+    latest = latest_rev(posts_dir, workspace_name)
+    if latest is None:
+        raise FileNotFoundError(f"No revisions found for workspace '{workspace_name}'.")
+    date_str, dest_dir_name, target_rev = (
+        latest.date,
+        latest.entry_name,
+        latest.revision,
     )
     post_dir = os.path.join(posts_dir, date_str, dest_dir_name)
     source_dir = os.path.join(post_dir, "source")
@@ -274,9 +276,8 @@ def _amend_latest_workspace(
         )
         return None
 
-    _, publish_date, revision = resolve_existing_post_metadata(
+    _, publish_date, revision = resolve_post_meta(
         post_dir=post_dir,
-        date_str=date_str,
         entry_name=dest_dir_name,
     )
     workspace_path = safe_join_child(args.workspace_base, workspace_name)
@@ -297,7 +298,7 @@ def _amend_latest_workspace(
 
 def run_amend_all(args: Namespace, refresh_content: bool = True) -> int:
     posts_dir = os.path.join(args.root_dir, "posts")
-    workspaces = collect_published_workspaces(posts_dir)
+    workspaces = published_workspaces(posts_dir)
     if not workspaces:
         print(f"No published workspaces found in '{posts_dir}'.")
         return 0
@@ -305,7 +306,7 @@ def run_amend_all(args: Namespace, refresh_content: bool = True) -> int:
     amended_count = 0
     glyph_target_dirs: List[str] = []
     max_workers = min(len(workspaces), max(1, os.cpu_count() or 1))
-    future_to_workspace: Dict[Future[Optional[Tuple[str, str, str]]], str] = {}
+    future_map: Dict[Future[Optional[Tuple[str, str, str]]], str] = {}
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         for workspace_name in workspaces:
             future = executor.submit(
@@ -314,10 +315,10 @@ def run_amend_all(args: Namespace, refresh_content: bool = True) -> int:
                 posts_dir,
                 workspace_name,
             )
-            future_to_workspace[future] = workspace_name
+            future_map[future] = workspace_name
 
         try:
-            for future in as_completed(future_to_workspace):
+            for future in as_completed(future_map):
                 result = future.result()
                 if result is None:
                     continue
@@ -327,14 +328,14 @@ def run_amend_all(args: Namespace, refresh_content: bool = True) -> int:
                 glyph_target_dirs.extend([post_dir, source_dir])
                 print(f"Amended '{workspace_name}' in '{post_dir}'")
         except Exception:
-            for pending_future in future_to_workspace:
+            for pending_future in future_map:
                 pending_future.cancel()
             raise
 
     if refresh_content:
         update_content(args)
     elif glyph_target_dirs:
-        refresh_glyph_assets(
+        refresh_glyphs(
             root_dir=args.root_dir,
             target_dirs=glyph_target_dirs,
         )

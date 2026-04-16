@@ -9,28 +9,28 @@ from commands.content import update_content
 from commands.upload import run_upload
 from commands.recover import run_recover
 from commands.serve import run_serve
-from commands.utils import validate_workspace_name
+from commands.utils import validate_workspace
 
 
-def _parse_workspace_name(value: str) -> str:
+def _parse_name(value: str) -> str:
     try:
-        return validate_workspace_name(value)
+        return validate_workspace(value)
     except ValueError as e:
         raise argparse.ArgumentTypeError(str(e)) from e
 
 
-def _add_command_parsers(subparsers: argparse._SubParsersAction) -> None:
+def _add_cmds(subparsers: argparse._SubParsersAction) -> None:
     init_parser = subparsers.add_parser(
         "init",
         help="Create a new post draft with the specified workspace name.",
     )
-    init_parser.add_argument("name", type=_parse_workspace_name)
+    init_parser.add_argument("name", type=_parse_name)
 
     compile_parser = subparsers.add_parser(
         "compile",
         help="Name of the workspace to be compiled.",
     )
-    compile_parser.add_argument("name", type=_parse_workspace_name)
+    compile_parser.add_argument("name", type=_parse_name)
     compile_parser.add_argument(
         "--amend",
         action=BooleanOptionalAction,
@@ -43,7 +43,7 @@ def _add_command_parsers(subparsers: argparse._SubParsersAction) -> None:
         "submit",
         help="Name of the workspace to be submitted.",
     )
-    submit_parser.add_argument("name", type=_parse_workspace_name)
+    submit_parser.add_argument("name", type=_parse_name)
     submit_parser.add_argument(
         "--amend",
         action=BooleanOptionalAction,
@@ -62,7 +62,7 @@ def _add_command_parsers(subparsers: argparse._SubParsersAction) -> None:
     )
     recover_parser.add_argument(
         "name",
-        type=_parse_workspace_name,
+        type=_parse_name,
     )
     recover_parser.add_argument(
         "--force",
@@ -117,7 +117,7 @@ def _build_parser() -> ArgumentParser:
         description="Driver for building blog posts from Typst sources.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
-    _add_command_parsers(subparsers)
+    _add_cmds(subparsers)
 
     base_dir = os.path.dirname(os.path.abspath(__file__))
     current_cwd = os.getcwd()

@@ -10,9 +10,9 @@ import tempfile
 from urllib.parse import parse_qs, unquote, urlparse
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple, TypeVar, Union
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
-from .revisions import list_workspace_revisions
+from .revisions import list_revisions
 
 
 _typst_path: Optional[str] = None
@@ -177,7 +177,7 @@ class HtmlBuildConfig:
     og_type: str = "website"
     og_url: Optional[str] = None
     glyph_scope_key: Optional[str] = None
-    enable_shared_glyph_extraction: bool = True
+    shared_glyphs: bool = True
     image_source_dir: Optional[str] = None
     site_base_url: Optional[str] = None
 
@@ -192,7 +192,7 @@ class CompileBuildRequest:
     typst_inputs: Optional[TypstInputs] = None
 
 
-def build_typst_inputs(
+def make_inputs(
     shared_inputs: Optional[Dict[str, str]] = None,
     svg_inputs: Optional[Dict[str, str]] = None,
     pdf_inputs: Optional[Dict[str, str]] = None,
@@ -227,15 +227,6 @@ def _append_svg_class(attrs: str, class_name: str) -> str:
     return f'{attrs} class="{class_name}"'
 
 
-def _remove_svg_attr(attrs: str, attr_name: str) -> str:
-    return re.sub(
-        rf'\s{attr_name}="[^"]*"',
-        "",
-        attrs,
-        flags=re.IGNORECASE,
-    )
-
-
 def _inject_svg_theme_classes(svg_data: str) -> str:
     def _rewrite_tag(match: re.Match) -> str:
         tag = match.group(1)
@@ -265,7 +256,12 @@ def _inject_svg_theme_classes(svg_data: str) -> str:
 
         updated_attrs = attrs
         for attr_name in sorted(attrs_to_remove):
-            updated_attrs = _remove_svg_attr(updated_attrs, attr_name)
+            updated_attrs = re.sub(
+                rf'\s{attr_name}="[^"]*"',
+                "",
+                updated_attrs,
+                flags=re.IGNORECASE,
+            )
         for class_name in classes:
             updated_attrs = _append_svg_class(updated_attrs, class_name)
         return f"<{tag}{updated_attrs}>"
@@ -301,13 +297,6 @@ def build_page_head_title(
         title_parts.append(site_title)
     return " - ".join(title_parts)
 
-
-def _strip_html_text(fragment: str) -> str:
-    text = _HTML_TAG_PATTERN.sub(" ", fragment)
-    text = html.unescape(text)
-    return re.sub(r"\s+", " ", text).strip()
-
-
 def _normalize_description_comparison_text(text: str) -> str:
     normalized = html.unescape(text)
     normalized = normalized.translate(
@@ -324,13 +313,13 @@ def _normalize_description_comparison_text(text: str) -> str:
     return re.sub(r"\s+", " ", normalized).strip()
 
 
-def extract_first_description_sentence(
+def first_desc(
     html_fragment: str,
-    fallback_description: str,
+    fallback_desc: str,
     skip_texts: Optional[List[str]] = None,
     max_length: int = 220,
 ) -> str:
-    normalized_skip_texts = {
+    skip_set = {
         _normalize_description_comparison_text(text)
         for text in (skip_texts or [])
         if text and text.strip()
@@ -343,14 +332,16 @@ def extract_first_description_sentence(
         ):
             continue
 
-        block_text = _strip_html_text(block_match.group(3))
+        block_text = _HTML_TAG_PATTERN.sub(" ", block_match.group(3))
+        block_text = html.unescape(block_text)
+        block_text = re.sub(r"\s+", " ", block_text).strip()
         if not block_text:
             continue
         if re.fullmatch(r"\d{4}-\d{2}-\d{2}", block_text):
             continue
         if (
             _normalize_description_comparison_text(block_text)
-            in normalized_skip_texts
+            in skip_set
         ):
             continue
 
@@ -365,7 +356,7 @@ def extract_first_description_sentence(
             return first_sentence
         return first_sentence[: max_length - 1].rstrip() + "…"
 
-    return fallback_description
+    return fallback_desc
 
 
 def _resolve_typst_path() -> str:
@@ -472,7 +463,7 @@ def _run_svgo(svg_path: str, preserve_ids: bool = False) -> None:
                 print(fallback_error.stderr.decode("utf-8"), file=sys.stderr)
 
 
-def reset_directory(path: str) -> None:
+def reset_dir(path: str) -> None:
     os.makedirs(path, exist_ok=True)
     if os.listdir(path):
         shutil.rmtree(path)
@@ -489,7 +480,7 @@ def make_temp_dir(build_base: str, prefix: str) -> str:
     return tempfile.mkdtemp(prefix=prefix, dir=get_temp_root(build_base))
 
 
-def validate_workspace_name(name: str) -> str:
+def validate_workspace(name: str) -> str:
     normalized = name.strip()
     if not normalized:
         raise ValueError("Workspace name must not be empty.")
@@ -539,16 +530,6 @@ def build_root_asset_href(asset_path: str) -> str:
     return f"/{WEB_ASSETS_DIR_NAME}/{rel_path}"
 
 
-def build_local_asset_href(asset_path: str) -> str:
-    rel_path = _build_asset_rel_path(asset_path)
-    return f"./{WEB_ASSETS_DIR_NAME}/{rel_path}"
-
-
-def build_asset_sibling_href(asset_path: str) -> str:
-    rel_path = _build_asset_rel_path(asset_path)
-    return f"./{rel_path}"
-
-
 def _rebase_relative_href_for_destination(
     href: str,
     source_dir: str,
@@ -577,7 +558,7 @@ def _rebase_relative_href_for_destination(
     return rebased_href
 
 
-def extract_declared_typst_string_from_source(source: str, name: str) -> Optional[str]:
+def decl_str_from_source(source: str, name: str) -> Optional[str]:
     string_pattern = re.compile(
         _TYPST_DECLARED_STRING_PATTERN_TEMPLATE.format(name=re.escape(name))
     )
@@ -602,20 +583,20 @@ def extract_declared_typst_string_from_source(source: str, name: str) -> Optiona
     return value
 
 
-def extract_required_declared_typst_string_from_source(source: str, name: str) -> str:
-    value = extract_declared_typst_string_from_source(source, name)
+def need_decl_str_from_source(source: str, name: str) -> str:
+    value = decl_str_from_source(source, name)
     if value is None:
         raise RuntimeError(f"Missing required {name} declaration in Typst source.")
     return value
 
 
-def extract_declared_typst_string(path: str, name: str) -> Optional[str]:
+def decl_str(path: str, name: str) -> Optional[str]:
     with open(path, "r", encoding="utf-8") as f:
-        return extract_declared_typst_string_from_source(f.read(), name)
+        return decl_str_from_source(f.read(), name)
 
 
-def extract_required_declared_typst_string(path: str, name: str) -> str:
-    value = extract_declared_typst_string(path, name)
+def need_decl_str(path: str, name: str) -> str:
+    value = decl_str(path, name)
     if value is None:
         raise RuntimeError(f"Missing required {name} declaration in '{path}'.")
     return value
@@ -720,8 +701,8 @@ def _minify_js_source(source: str) -> str:
 def _minify_css_source(source: str) -> str:
     global _lightningcss_missing_warned
 
-    lightningcss_command = _resolve_lightningcss_command()
-    if not lightningcss_command:
+    css_cmd = _resolve_lightningcss_command()
+    if not css_cmd:
         if not _lightningcss_missing_warned:
             print(
                 "Lightning CSS not found, skipping CSS minification. "
@@ -733,7 +714,7 @@ def _minify_css_source(source: str) -> str:
 
     try:
         result = subprocess.run(
-            [*lightningcss_command, "--minify"],
+            [*css_cmd, "--minify"],
             check=True,
             input=source,
             text=True,
@@ -770,7 +751,7 @@ _HTML_MINIFY_PRESERVE_PATTERN = re.compile(
 )
 
 
-def _minify_html(content: str) -> str:
+def _minify_html_text(content: str) -> str:
     segments = _HTML_MINIFY_PRESERVE_PATTERN.split(content)
     parts: List[str] = []
     for i, segment in enumerate(segments):
@@ -786,12 +767,12 @@ def _minify_html(content: str) -> str:
     return "".join(parts).strip() + "\n"
 
 
-def minify_html_file(path: str) -> None:
+def minify_html(path: str) -> None:
     if not os.path.isfile(path):
         return
     with open(path, "r", encoding="utf-8") as f:
         content = f.read()
-    minified = _minify_html(content)
+    minified = _minify_html_text(content)
     if minified == content:
         return
     with open(path, "w", encoding="utf-8") as f:
@@ -816,7 +797,7 @@ def _remove_legacy_root_js_files(webroot_dir: str) -> int:
     return removed_count
 
 
-def build_driver_web_assets(driver_dir: str, webroot_dir: str) -> DriverWebAssets:
+def build_web_assets(driver_dir: str, webroot_dir: str) -> DriverWebAssets:
     if not os.path.isdir(driver_dir):
         raise FileNotFoundError(driver_dir)
 
@@ -966,12 +947,10 @@ def _flatten_query_text(node: Any) -> str:
     return ""
 
 
-def _query_typst_json_nodes(
+def _query_nodes(
     main_typ_path: str,
     query_root: str,
     selector: str,
-    query_label: str,
-    parse_label: str,
     inputs: Optional[Dict[str, str]] = None,
 ) -> List[Dict[str, Any]]:
     abs_main_typ = os.path.abspath(main_typ_path)
@@ -992,42 +971,40 @@ def _query_typst_json_nodes(
         for key, value in inputs.items():
             command.extend(["--input", f"{key}={value}"])
 
+    return _run_typst_query_json(
+        command=command,
+    )
+
+
+def _run_typst_query_json(
+    command: List[str],
+    source_bytes: Optional[bytes] = None,
+    cwd: Optional[str] = None,
+) -> List[Dict[str, Any]]:
     try:
         result = subprocess.run(
             command,
             check=True,
             capture_output=True,
-            text=True,
+            cwd=cwd,
+            input=source_bytes,
         )
     except subprocess.CalledProcessError as e:
-        stderr = e.stderr.strip() if e.stderr else ""
+        stderr = e.stderr.decode("utf-8").strip() if e.stderr else ""
         if stderr:
-            raise RuntimeError(
-                f"Failed to query {query_label} from Typst source: {stderr}"
-            ) from e
-        raise RuntimeError(
-            f"Failed to query {query_label} from Typst source: {e}"
-        ) from e
+            raise RuntimeError(f"Failed to query Typst source: {stderr}") from e
+        raise RuntimeError(f"Failed to query Typst source: {e}") from e
 
-    raw = result.stdout.strip()
+    raw = result.stdout.decode("utf-8").strip()
     if not raw:
-        raise RuntimeError(f"Typst query produced empty output for {query_label}.")
+        raise RuntimeError("Typst query produced empty output.")
 
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as e:
-        raise RuntimeError(f"Failed to parse {parse_label}: {e}") from e
+        raise RuntimeError(f"Failed to parse Typst query output: {e}") from e
 
-    if not isinstance(data, list):
-        raise RuntimeError(f"Invalid {parse_label}: expected list root.")
-
-    nodes: List[Dict[str, Any]] = []
-    for item in data:
-        if not isinstance(item, dict):
-            raise RuntimeError(f"Invalid {parse_label}: expected object entries.")
-        nodes.append(item)
-    return nodes
-
+    return data
 
 def extract_typst_links(
     main_typ_path: str,
@@ -1036,19 +1013,13 @@ def extract_typst_links(
 ) -> List[Tuple[str, str]]:
     links: List[Tuple[str, str]] = []
     seen: Set[str] = set()
-    for item in _query_typst_json_nodes(
+    for item in _query_nodes(
         main_typ_path=main_typ_path,
         query_root=query_root,
         selector="link",
-        query_label="links",
-        parse_label="Typst query output",
         inputs=inputs,
     ):
-        href = item["dest"]
-        if not isinstance(href, str):
-            raise RuntimeError(
-                "Invalid Typst link query output: 'dest' must be string."
-            )
+        href = str(item["dest"])
         if not href or href in seen:
             continue
 
@@ -1066,27 +1037,12 @@ def _extract_typst_table_rows(
     table_payload: Dict[str, Any],
 ) -> List[List[Dict[str, Any]]]:
     columns_raw = table_payload["columns"]
-    if isinstance(columns_raw, list):
-        column_count = len(columns_raw)
-    elif isinstance(columns_raw, int):
-        column_count = columns_raw
-    else:
-        raise RuntimeError(
-            "Invalid Typst table query output: 'columns' must be list or int."
-        )
-    if column_count <= 0:
-        raise RuntimeError("Invalid Typst table query output: table must have columns.")
+    column_count = len(columns_raw) if isinstance(columns_raw, list) else int(columns_raw)
 
     children = table_payload["children"]
-    if not isinstance(children, list):
-        raise RuntimeError("Invalid Typst table query output: 'children' must be list.")
 
     cell_nodes: List[Dict[str, Any]] = []
     for child in children:
-        if not isinstance(child, dict):
-            raise RuntimeError(
-                "Invalid Typst table query output: table child entry must be object."
-            )
         if child.get("func") != "cell":
             continue
 
@@ -1099,19 +1055,7 @@ def _extract_typst_table_rows(
         )
 
         colspan = child.get("colspan", 1)
-        if not isinstance(colspan, int) or colspan <= 0:
-            raise RuntimeError(
-                "Invalid Typst table query output: 'colspan' must be positive int."
-            )
         rowspan = child.get("rowspan", 1)
-        if not isinstance(rowspan, int) or rowspan <= 0:
-            raise RuntimeError(
-                "Invalid Typst table query output: 'rowspan' must be positive int."
-            )
-        if colspan > column_count:
-            raise RuntimeError(
-                "Invalid Typst table query output: cell colspan exceeds column count."
-            )
 
         cell_nodes.append(
             {
@@ -1157,15 +1101,7 @@ def _extract_typst_table_rows(
                 rows.append([])
             for col_offset in range(colspan):
                 target_col = col_index + col_offset
-                if target_col >= column_count:
-                    raise RuntimeError(
-                        "Invalid Typst table query output: cell span exceeds table width."
-                    )
                 slot_key = (target_row, target_col)
-                if occupied.get(slot_key, False):
-                    raise RuntimeError(
-                        "Invalid Typst table query output: overlapping table spans."
-                    )
                 occupied[slot_key] = True
 
         col_index += colspan
@@ -1180,123 +1116,35 @@ def _extract_typst_table_rows(
     return rows
 
 
-_ExtractResult = TypeVar("_ExtractResult")
-
-
-def _extract_typst_from_content(
+def _query_nodes_from_source(
     source_content: Union[str, bytes],
     query_root: str,
-    query_prefix: str,
-    extractor: Callable[[str, str, Optional[Dict[str, str]]], List[_ExtractResult]],
-    inputs: Optional[Dict[str, str]] = None,
-) -> List[_ExtractResult]:
-    temp_query_path = ""
-    try:
-        if isinstance(source_content, bytes):
-            with tempfile.NamedTemporaryFile(
-                mode="wb",
-                suffix=".typ",
-                prefix=query_prefix,
-                dir=query_root,
-                delete=False,
-            ) as temp_file:
-                temp_file.write(source_content)
-                temp_query_path = temp_file.name
-        else:
-            with tempfile.NamedTemporaryFile(
-                mode="w",
-                suffix=".typ",
-                prefix=query_prefix,
-                dir=query_root,
-                delete=False,
-                encoding="utf-8",
-            ) as temp_file:
-                temp_file.write(source_content)
-                temp_query_path = temp_file.name
-
-        return extractor(temp_query_path, query_root, inputs)
-    finally:
-        if temp_query_path and os.path.exists(temp_query_path):
-            os.remove(temp_query_path)
-
-
-def extract_action_metadata(
-    main_typ_path: str,
-    query_root: str,
-    inputs: Optional[Dict[str, str]] = None,
-) -> Dict[str, Dict[str, str]]:
-    """Return {action_value: {label, role, tabindex}} from <driver-action> metadata."""
-    result: Dict[str, Dict[str, str]] = {}
-    for node in _query_typst_json_nodes(
-        main_typ_path=main_typ_path,
-        query_root=query_root,
-        selector="<driver-action>",
-        query_label="action metadata",
-        parse_label="Typst action metadata query output",
-        inputs=inputs,
-    ):
-        item = node.get("value")
-        if not isinstance(item, dict):
-            continue
-        action_val = item.get("a")
-        if not isinstance(action_val, str) or not action_val:
-            continue
-        result[action_val] = {
-            "label": str(item.get("label") or ""),
-            "role": str(item.get("role") or ""),
-            "tabindex": str(item.get("tabindex") or ""),
-        }
-    return result
-
-
-def extract_action_metadata_from_content(
-    source_content: Union[str, bytes],
-    query_root: str,
-    inputs: Optional[Dict[str, str]] = None,
-) -> Dict[str, Dict[str, str]]:
-    return _extract_typst_from_content(
-        source_content=source_content,
-        query_root=query_root,
-        query_prefix=".action-query-",
-        extractor=extract_action_metadata,
-        inputs=inputs,
-    )
-
-
-def extract_doc_structure(
-    main_typ_path: str,
-    query_root: str,
+    selector: str,
     inputs: Optional[Dict[str, str]] = None,
 ) -> List[Dict[str, Any]]:
-    """Returns ordered list of metadata dicts from <driver-doc> query."""
-    nodes = _query_typst_json_nodes(
-        main_typ_path=main_typ_path,
-        query_root=query_root,
-        selector="<driver-doc>",
-        query_label="document structure",
-        parse_label="Typst document structure query output",
-        inputs=inputs,
+    source_bytes = (
+        source_content.encode("utf-8")
+        if isinstance(source_content, str)
+        else source_content
     )
-    result: List[Dict[str, Any]] = []
-    for node in nodes:
-        value = node.get("value")
-        if isinstance(value, dict):
-            result.append(value)
-    return result
+    command = [
+        _resolve_typst_path(),
+        "query",
+        "-",
+        selector,
+        "--root",
+        os.path.abspath(query_root),
+        "--format",
+        "json",
+    ]
+    if inputs:
+        for key, value in inputs.items():
+            command.extend(["--input", f"{key}={value}"])
 
-
-def extract_doc_structure_from_content(
-    source_content: Union[str, bytes],
-    query_root: str,
-    inputs: Optional[Dict[str, str]] = None,
-) -> List[Dict[str, Any]]:
-    """Like extract_doc_structure but takes driver source bytes (pre-IMPORT_MAIN-substituted)."""
-    return _extract_typst_from_content(
-        source_content=source_content,
-        query_root=query_root,
-        query_prefix=".doc-query-",
-        extractor=extract_doc_structure,
-        inputs=inputs,
+    return _run_typst_query_json(
+        command=command,
+        source_bytes=source_bytes,
+        cwd=query_root,
     )
 
 
@@ -1343,7 +1191,7 @@ def sources_hash(paths: List[str], length: int = _ASSET_HASH_LENGTH) -> str:
     return hasher.hexdigest()[:length]
 
 
-def hash_text_with_sources(
+def hash_text_with_paths(
     text: str,
     paths: List[str],
     length: int = _ASSET_HASH_LENGTH,
@@ -1375,40 +1223,6 @@ def extract_pdf_text(
                 title = lines[0].strip()
         hidden_text = f'<div class="sr-only">\n{html.escape(raw_text)}\n</div>'
     return title, hidden_text
-
-
-def _rewrite_html_asset_href(
-    html_path: str, asset_path: str, tag_pattern: str
-) -> bool:
-    if not os.path.isfile(html_path):
-        return False
-    asset_name = os.path.basename(asset_path)
-    if not asset_name:
-        return False
-    with open(html_path, "r", encoding="utf-8") as f:
-        html_content = f.read()
-    href = build_relative_href(os.path.dirname(html_path), asset_path)
-    name_parts = asset_name.split(".")
-    if len(name_parts) >= 3:
-        name_pattern = (
-            re.escape(name_parts[0])
-            + r"\.[^.]+\."
-            + re.escape(".".join(name_parts[2:]))
-        )
-    else:
-        name_pattern = re.escape(asset_name)
-    updated_html = re.sub(
-        tag_pattern.format(name_pattern),
-        rf"\1{href}\2",
-        html_content,
-        count=1,
-    )
-    if updated_html == html_content:
-        return False
-    with open(html_path, "w", encoding="utf-8") as f:
-        f.write(updated_html)
-    return True
-
 
 def _extract_first_glyph_symbol_id(glyph_asset_path: str) -> Optional[str]:
     if not os.path.isfile(glyph_asset_path):
@@ -1445,7 +1259,7 @@ def _build_glyph_preload_svg(glyph_src: str, glyph_symbol_id: str) -> str:
     )
 
 
-def rewrite_glyph_preload_href(html_path: str, glyph_asset_path: str) -> bool:
+def rewrite_glyph_preload(html_path: str, glyph_asset_path: str) -> bool:
     if not os.path.isfile(html_path):
         return False
 
@@ -1554,10 +1368,10 @@ def _short_id_to_index(short_id: str) -> int:
 
 
 def _load_global_glyph_registry(map_path: str) -> Dict[str, Any]:
-    current_typst_version = _resolve_typst_version()
+    typst_ver = _resolve_typst_version()
     default_registry: Dict[str, Any] = {
         "version": _GLOBAL_GLYPH_MAP_VERSION,
-        "typst_version": current_typst_version,
+        "typst_version": typst_ver,
         "next_short_index": 1,
         "symbols": {},
         "fingerprint_to_short": {},
@@ -1572,7 +1386,7 @@ def _load_global_glyph_registry(map_path: str) -> Dict[str, Any]:
 
     return {
         "version": data["version"],
-        "typst_version": current_typst_version,
+        "typst_version": typst_ver,
         "next_short_index": data["next_short_index"],
         "symbols": data["symbols"],
         "fingerprint_to_short": data["fingerprint_to_short"],
@@ -1876,7 +1690,7 @@ def _extract_and_rewrite_shared_svg_glyphs(
         glyph_href = (
             build_root_asset_href(glyph_asset_path)
             if use_global_registry
-            else build_asset_sibling_href(glyph_asset_path)
+            else f"./{_build_asset_rel_path(glyph_asset_path)}"
         )
         wrapper_symbols: List[str] = []
         seen_local_ids: Set[str] = set()
@@ -1901,7 +1715,7 @@ def _extract_and_rewrite_shared_svg_glyphs(
     return glyph_asset_path
 
 
-def apply_global_glyph_mapping(root_dir: str, target_dirs: List[str]) -> Optional[str]:
+def apply_glyph_map(root_dir: str, target_dirs: List[str]) -> Optional[str]:
     assets_dir = safe_join_child(root_dir, WEB_ASSETS_DIR_NAME)
     glyph_asset_path = os.path.join(assets_dir, GLOBAL_GLYPH_ASSET_FILENAME)
     glyph_map_path = os.path.join(assets_dir, GLOBAL_GLYPH_MAP_FILENAME)
@@ -1959,7 +1773,7 @@ def _is_root_asset_referenced(root_dir: str, asset_filename: str) -> bool:
     return False
 
 
-def cleanup_legacy_glyph_assets(
+def clean_glyph_assets(
     root_dir: str,
     target_dirs: List[str],
     clean_global_store: bool = False,
@@ -1967,14 +1781,14 @@ def cleanup_legacy_glyph_assets(
     cleaned_count = 0
 
     root_assets_dir = safe_join_child(root_dir, WEB_ASSETS_DIR_NAME)
-    candidate_asset_dirs: Set[str] = set()
-    candidate_asset_dirs.add(root_assets_dir)
+    asset_dirs: Set[str] = set()
+    asset_dirs.add(root_assets_dir)
     for directory in target_dirs:
         if not os.path.isdir(directory):
             continue
-        candidate_asset_dirs.add(os.path.join(directory, WEB_ASSETS_DIR_NAME))
+        asset_dirs.add(os.path.join(directory, WEB_ASSETS_DIR_NAME))
 
-    for asset_dir in sorted(candidate_asset_dirs):
+    for asset_dir in sorted(asset_dirs):
         if not os.path.isdir(asset_dir):
             continue
 
@@ -2531,19 +2345,19 @@ def _normalize_svg_href_file(
     with open(svg_path, "r", encoding="utf-8") as svg_file:
         svg_data = svg_file.read()
 
-    normalized_svg_data = _normalize_svg_href_attributes(svg_data)
-    normalized_svg_data = _strip_typst_classes(normalized_svg_data)
-    normalized_svg_data = _inject_svg_anchor_accessibility(
-        normalized_svg_data,
+    svg_out = _normalize_svg_href_attributes(svg_data)
+    svg_out = _strip_typst_classes(svg_out)
+    svg_out = _inject_svg_anchor_accessibility(
+        svg_out,
         svg_path=svg_path,
         site_base_url=site_base_url,
         action_metadata=action_metadata,
     )
-    if normalized_svg_data == svg_data:
+    if svg_out == svg_data:
         return
 
     with open(svg_path, "w", encoding="utf-8") as svg_file:
-        svg_file.write(normalized_svg_data)
+        svg_file.write(svg_out)
 
 
 def _prepare_anchor_hrefs_for_svgo_file(svg_path: str) -> None:
@@ -2582,12 +2396,6 @@ def _convert_to_webp(src_bytes: bytes, dst_path: str) -> None:
 
     with Image.open(io.BytesIO(src_bytes)) as img:
         img.save(dst_path, "webp", quality=85)
-
-
-def _build_generated_driver_image_name(image_rel: str, asset_hash: str) -> str:
-    src_hash = hashlib.sha1(image_rel.encode()).hexdigest()[:_ASSET_HASH_LENGTH]
-    return f"image.{src_hash}.{asset_hash}.webp"
-
 
 def _is_generated_driver_image_asset(filename: str) -> bool:
     parts = filename.split(".")
@@ -2665,7 +2473,10 @@ def _replace_driver_image_anchors(
 
         webp_name = image_asset_names.get(image_rel)
         if webp_name is None:
-            webp_name = _build_generated_driver_image_name(image_rel, asset_hash)
+            src_hash = hashlib.sha1(image_rel.encode()).hexdigest()[
+                :_ASSET_HASH_LENGTH
+            ]
+            webp_name = f"image.{src_hash}.{asset_hash}.webp"
             image_asset_names[image_rel] = webp_name
         dst_path = os.path.join(svg_dest_dir, webp_name)
         if not os.path.exists(dst_path):
@@ -2784,9 +2595,6 @@ def _build_open_graph_metadata(
     og_type: str,
     og_url: Optional[str],
 ) -> str:
-    if not og_type:
-        raise RuntimeError("Open Graph type must not be empty.")
-
     metadata_lines = [
         f'<meta property="og:title" content="{html.escape(title, quote=True)}">',
         (
@@ -2872,7 +2680,7 @@ def build_html_from_svgs(
         )
 
     glyph_asset_path: Optional[str] = None
-    if config.enable_shared_glyph_extraction:
+    if config.shared_glyphs:
         glyph_scope = config.glyph_scope_key or config.svg_name_prefix
         glyph_asset_path = _extract_and_rewrite_shared_svg_glyphs(
             patched_svg_paths,
@@ -2888,7 +2696,7 @@ def build_html_from_svgs(
             site_base_url=config.site_base_url,
             action_metadata=action_metadata,
         )
-    if config.enable_shared_glyph_extraction and glyph_asset_path:
+    if config.shared_glyphs and glyph_asset_path:
         _optimize_svg_with_normalized_href(
             glyph_asset_path,
             preserve_ids=True,
@@ -2896,7 +2704,7 @@ def build_html_from_svgs(
         )
 
     for svg_path, page_title in page_render_items:
-        page_href = build_local_asset_href(svg_path)
+        page_href = f"./{WEB_ASSETS_DIR_NAME}/{_build_asset_rel_path(svg_path)}"
         page_links_list.append(
             f'<object class="page" type="image/svg+xml" data="{html.escape(page_href, quote=True)}" '
             f'title="{page_title}"></object>'
@@ -2978,16 +2786,16 @@ def build_html_from_svgs(
         )
     index_content = index_content.replace("{{RSS_FEED_LINK}}", rss_feed_link)
 
-    glyph_preload_html = ""
-    warmup_glyph_asset_path = (
+    glyph_html = ""
+    warm_glyph_path = (
         glyph_asset_path or config.asset_context.global_glyph_asset_path
     )
-    if warmup_glyph_asset_path:
-        glyph_src = build_root_asset_href(warmup_glyph_asset_path)
-        glyph_symbol_id = _extract_first_glyph_symbol_id(warmup_glyph_asset_path)
+    if warm_glyph_path:
+        glyph_src = build_root_asset_href(warm_glyph_path)
+        glyph_symbol_id = _extract_first_glyph_symbol_id(warm_glyph_path)
         if glyph_symbol_id is not None:
-            glyph_preload_html = _build_glyph_preload_svg(glyph_src, glyph_symbol_id)
-    index_content = index_content.replace("{{GLYPH_PRELOAD}}", glyph_preload_html)
+            glyph_html = _build_glyph_preload_svg(glyph_src, glyph_symbol_id)
+    index_content = index_content.replace("{{GLYPH_PRELOAD}}", glyph_html)
 
     with open(index_path, "w", encoding="utf-8") as f:
         f.write(index_content)
@@ -2995,10 +2803,10 @@ def build_html_from_svgs(
     return index_path
 
 
-def find_latest_revision(
+def prev_rev(
     posts_dir: str, workspace_name: str, skip_latest: bool = False
 ) -> Tuple[Optional[str], Optional[str]]:
-    revisions = list_workspace_revisions(posts_dir, workspace_name)
+    revisions = list_revisions(posts_dir, workspace_name)
     if not revisions:
         return None, None
 
@@ -3010,26 +2818,26 @@ def find_latest_revision(
     return selected.date, f"../../{selected.date}/{selected.entry_name}/index.html"
 
 
-def compile_and_build_html(request: CompileBuildRequest) -> str:
-    display_compiled_date = datetime.now().strftime("%Y-%m-%d")
-    resolved_inputs_svg = (
+def compile_html(request: CompileBuildRequest) -> str:
+    build_date = datetime.now().strftime("%Y-%m-%d")
+    svg_in = (
         dict(request.typst_inputs.svg) if request.typst_inputs is not None else {}
     )
-    resolved_inputs_pdf = (
+    pdf_in = (
         dict(request.typst_inputs.pdf) if request.typst_inputs is not None else {}
     )
-    resolved_inputs_svg.setdefault("display_compiled_date", display_compiled_date)
-    resolved_inputs_pdf.setdefault("display_compiled_date", display_compiled_date)
+    svg_in.setdefault("build_date", build_date)
+    pdf_in.setdefault("build_date", build_date)
 
     svg_prefix = f"{request.html.svg_name_prefix}{{0p}}.{request.asset_hash}.svg"
     pdf_name = f"{request.file_prefix}.{request.asset_hash}.pdf"
-    pdf_creation_timestamp = _resolve_pdf_creation_timestamp(resolved_inputs_pdf)
+    pdf_ts = _resolve_pdf_creation_timestamp(pdf_in)
 
     run_typst_compile(
         request.source_bytes,
         os.path.join(request.output_dir, svg_prefix),
         export_format="svg",
-        inputs=resolved_inputs_svg,
+        inputs=svg_in,
     )
 
     pdf_path = os.path.join(request.output_dir, pdf_name)
@@ -3037,8 +2845,8 @@ def compile_and_build_html(request: CompileBuildRequest) -> str:
         request.source_bytes,
         pdf_path,
         export_format="pdf",
-        inputs=resolved_inputs_pdf,
-        creation_timestamp=pdf_creation_timestamp,
+        inputs=pdf_in,
+        creation_timestamp=pdf_ts,
     )
 
     page_count = len(
@@ -3049,11 +2857,24 @@ def compile_and_build_html(request: CompileBuildRequest) -> str:
         ]
     )
 
-    action_meta = extract_action_metadata_from_content(
-        request.source_bytes,
+    action_meta: Dict[str, Dict[str, str]] = {}
+    for node in _query_nodes_from_source(
+        source_content=request.source_bytes,
         query_root=os.getcwd(),
-        inputs=resolved_inputs_svg,
-    )
+        selector="<driver-action>",
+        inputs=svg_in,
+    ):
+        item = node.get("value")
+        if not isinstance(item, dict):
+            continue
+        action_val = item.get("a")
+        if not isinstance(action_val, str) or not action_val:
+            continue
+        action_meta[action_val] = {
+            "label": str(item.get("label") or ""),
+            "role": str(item.get("role") or ""),
+            "tabindex": str(item.get("tabindex") or ""),
+        }
 
     return build_html_from_svgs(
         config=request.html,

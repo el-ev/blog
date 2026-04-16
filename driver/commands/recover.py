@@ -5,14 +5,14 @@ import sys
 from argparse import Namespace
 from typing import Any, List, Optional, Tuple
 
-from .revisions import find_latest_workspace_revision
+from .revisions import latest_rev
 from .utils import safe_join_child
 
 
 def _find_latest_post_directory(
     posts_dir: str, workspace_name: str
 ) -> Tuple[Optional[str], Optional[str], Optional[str]]:
-    latest = find_latest_workspace_revision(posts_dir, workspace_name)
+    latest = latest_rev(posts_dir, workspace_name)
     if latest is None:
         return None, None, None
     return latest.date, latest.entry_name, latest.path
@@ -42,7 +42,7 @@ def run_recover(args: Namespace) -> None:
     workspace_name: str = args.name
 
     posts_dir = os.path.join(args.root_dir, "posts")
-    recovered_date, recovered_dir_name, post_dir = _find_latest_post_directory(
+    recovered_date, recovered_name, post_dir = _find_latest_post_directory(
         posts_dir, workspace_name
     )
     if not post_dir:
@@ -93,5 +93,5 @@ def run_recover(args: Namespace) -> None:
 
     print(
         f"Recovered workspace '{workspace_name}' at '{workspace_path}' "
-        f"from revision '{recovered_date}/{recovered_dir_name}'."
+        f"from revision '{recovered_date}/{recovered_name}'."
     )
