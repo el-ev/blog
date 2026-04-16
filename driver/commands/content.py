@@ -279,17 +279,11 @@ def update_content(args: Namespace) -> None:
         inputs_pdf=input_values_pdf,
         extract_title_from_pdf=False,
         hidden_text_override=hidden_text,
-        stylesheet_asset_path=asset_context.web_assets.stylesheet_path,
-        clipboard_asset_path=asset_context.web_assets.clipboard_script_path,
-        theme_asset_path=asset_context.web_assets.theme_script_path,
+        asset_context=asset_context,
         rss_feed_path=os.path.join(root_dir, "rss.xml"),
         og_type="website",
         og_url=og_url,
         site_base_url=base_url,
-        global_glyph_asset_path=asset_context.global_glyph_asset_path,
-        global_glyph_map_path=asset_context.global_glyph_map_path,
-        inline_style=asset_context.web_assets.inline_style,
-        inline_script=asset_context.web_assets.inline_script,
     )
 
     glyph_target_dirs: List[str] = [root_dir, content_asset_dir]

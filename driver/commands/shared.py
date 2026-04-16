@@ -1,9 +1,9 @@
 import json
 import os
-from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from .utils import (
+    DriverAssetContext,
     DriverWebAssets,
     WEB_ASSETS_DIR_NAME,
     GLOBAL_GLYPH_ASSET_FILENAME,
@@ -13,13 +13,6 @@ from .utils import (
     cleanup_legacy_glyph_assets,
     rewrite_glyph_preload_href,
 )
-
-
-@dataclass(frozen=True)
-class DriverAssetContext:
-    web_assets: DriverWebAssets
-    global_glyph_asset_path: str
-    global_glyph_map_path: str
 
 
 def build_driver_asset_context(driver_dir: str, root_dir: str) -> DriverAssetContext:

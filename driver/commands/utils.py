@@ -137,6 +137,13 @@ class DriverWebAssets:
     inline_script: str
 
 
+@dataclass(frozen=True)
+class DriverAssetContext:
+    web_assets: DriverWebAssets
+    global_glyph_asset_path: str
+    global_glyph_map_path: str
+
+
 def _append_svg_class(attrs: str, class_name: str) -> str:
     class_match = re.search(r'\sclass="([^"]*)"', attrs)
     if class_match:
@@ -2775,6 +2782,7 @@ def build_html_from_svgs(
     dest_dir: str,
     page_count: int,
     title_format: str,
+    asset_context: "DriverAssetContext",
     pdf_path: Optional[str] = None,
     svg_href_rewrites: Optional[Dict[str, str]] = None,
     extract_title_from_pdf: bool = False,
@@ -2787,18 +2795,11 @@ def build_html_from_svgs(
     svg_name_prefix: str = "page",
     html_filename: str = "index.html",
     asset_dest_dir: Optional[str] = None,
-    stylesheet_asset_path: Optional[str] = None,
-    clipboard_asset_path: Optional[str] = None,
-    theme_asset_path: Optional[str] = None,
     rss_feed_path: Optional[str] = None,
     og_type: str = "website",
     og_url: Optional[str] = None,
     glyph_scope_key: Optional[str] = None,
     enable_shared_glyph_extraction: bool = True,
-    global_glyph_asset_path: Optional[str] = None,
-    global_glyph_map_path: Optional[str] = None,
-    inline_style: str = "",
-    inline_script: str = "",
     image_source_dir: Optional[str] = None,
     asset_hash: Optional[str] = None,
     site_base_url: Optional[str] = None,
@@ -2868,8 +2869,8 @@ def build_html_from_svgs(
             patched_svg_paths,
             dest_dir=page_asset_dir,
             glyph_scope_key=glyph_scope,
-            global_glyph_asset_path=global_glyph_asset_path,
-            global_glyph_map_path=global_glyph_map_path,
+            global_glyph_asset_path=asset_context.global_glyph_asset_path,
+            global_glyph_map_path=asset_context.global_glyph_map_path,
         )
 
     for svg_path in patched_svg_paths:
@@ -2895,11 +2896,11 @@ def build_html_from_svgs(
     index_content = template.replace("{{PAGES}}", page_links)
     index_content = index_content.replace(
         "{{INLINE_STYLE}}",
-        f"<style>{inline_style}</style>" if inline_style else "",
+        f"<style>{asset_context.web_assets.inline_style}</style>" if asset_context.web_assets.inline_style else "",
     )
     index_content = index_content.replace(
         "{{INLINE_SCRIPT}}",
-        f"<script>{inline_script}</script>" if inline_script else "",
+        f"<script>{asset_context.web_assets.inline_script}</script>" if asset_context.web_assets.inline_script else "",
     )
 
     title = default_title
@@ -2934,15 +2935,9 @@ def build_html_from_svgs(
     index_content = index_content.replace("{{TOPBAR}}", top_bar_html)
     index_content = index_content.replace("{{REVISION}}", revision_html)
 
-    stylesheet_src = ""
-    if stylesheet_asset_path:
-        stylesheet_src = build_root_asset_href(stylesheet_asset_path)
-    clipboard_src = ""
-    if clipboard_asset_path:
-        clipboard_src = build_root_asset_href(clipboard_asset_path)
-    theme_src = ""
-    if theme_asset_path:
-        theme_src = build_root_asset_href(theme_asset_path)
+    stylesheet_src = build_root_asset_href(asset_context.web_assets.stylesheet_path)
+    clipboard_src = build_root_asset_href(asset_context.web_assets.clipboard_script_path)
+    theme_src = build_root_asset_href(asset_context.web_assets.theme_script_path)
     index_content = index_content.replace(
         "{{STYLESHEET_SRC}}", html.escape(stylesheet_src)
     )
@@ -2963,7 +2958,7 @@ def build_html_from_svgs(
     index_content = index_content.replace("{{RSS_FEED_LINK}}", rss_feed_link)
 
     glyph_preload_html = ""
-    warmup_glyph_asset_path = glyph_asset_path or global_glyph_asset_path
+    warmup_glyph_asset_path = glyph_asset_path or asset_context.global_glyph_asset_path
     if warmup_glyph_asset_path:
         glyph_src = build_root_asset_href(warmup_glyph_asset_path)
         glyph_symbol_id = _extract_first_glyph_symbol_id(warmup_glyph_asset_path)
@@ -3001,6 +2996,7 @@ def compile_and_build_html(
     dest_dir: str,
     title_format: str,
     default_title: str,
+    asset_context: "DriverAssetContext",
     description: Optional[str] = None,
     inputs_svg: Optional[Dict[str, str]] = None,
     inputs_pdf: Optional[Dict[str, str]] = None,
@@ -3011,18 +3007,11 @@ def compile_and_build_html(
     svg_name_prefix: str = "page",
     html_filename: str = "index.html",
     asset_dest_dir: Optional[str] = None,
-    stylesheet_asset_path: Optional[str] = None,
-    clipboard_asset_path: Optional[str] = None,
-    theme_asset_path: Optional[str] = None,
     rss_feed_path: Optional[str] = None,
     og_type: str = "website",
     og_url: Optional[str] = None,
     glyph_scope_key: Optional[str] = None,
     enable_shared_glyph_extraction: bool = True,
-    global_glyph_asset_path: Optional[str] = None,
-    global_glyph_map_path: Optional[str] = None,
-    inline_style: str = "",
-    inline_script: str = "",
     image_source_dir: Optional[str] = None,
     site_base_url: Optional[str] = None,
 ) -> str:
@@ -3072,18 +3061,12 @@ def compile_and_build_html(
         svg_name_prefix=svg_name_prefix,
         html_filename=html_filename,
         asset_dest_dir=asset_dest_dir,
-        stylesheet_asset_path=stylesheet_asset_path,
-        clipboard_asset_path=clipboard_asset_path,
-        theme_asset_path=theme_asset_path,
+        asset_context=asset_context,
         rss_feed_path=rss_feed_path,
         og_type=og_type,
         og_url=og_url,
         glyph_scope_key=glyph_scope_key or svg_name_prefix,
         enable_shared_glyph_extraction=enable_shared_glyph_extraction,
-        global_glyph_asset_path=global_glyph_asset_path,
-        global_glyph_map_path=global_glyph_map_path,
-        inline_style=inline_style,
-        inline_script=inline_script,
         image_source_dir=image_source_dir,
         asset_hash=asset_hash,
         site_base_url=site_base_url,

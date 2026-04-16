@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 from .utils import (
+    DriverAssetContext,
     build_raw_copy_assets,
     compile_and_build_html,
     extract_typst_raws_from_content,
@@ -147,21 +148,15 @@ def _build_meta_hidden_text(
 def compile_meta_page(
     build_base: str,
     base_dir: str,
-    stylesheet_asset_path: str,
-    clipboard_asset_path: str,
-    theme_asset_path: str,
     dest_dir: str,
     asset_dir: Optional[str],
     post_title: str,
     meta_fields: Dict[str, str],
     workspace_files: List[str],
-    global_glyph_asset_path: str,
-    global_glyph_map_path: str,
+    asset_context: DriverAssetContext,
     rss_feed_path: Optional[str] = None,
     og_url: Optional[str] = None,
     site_base_url: Optional[str] = None,
-    inline_style: str = "",
-    inline_script: str = "",
 ) -> None:
     meta_template_path = os.path.join(base_dir, "meta.template.typ")
     with open(meta_template_path, "r", encoding="utf-8") as f:
@@ -220,18 +215,12 @@ def compile_meta_page(
             svg_name_prefix="meta-page",
             html_filename="meta.html",
             asset_dest_dir=asset_dir,
-            stylesheet_asset_path=stylesheet_asset_path,
-            clipboard_asset_path=clipboard_asset_path,
-            theme_asset_path=theme_asset_path,
+            asset_context=asset_context,
             rss_feed_path=rss_feed_path,
             og_type="article",
             og_url=og_url,
             site_base_url=site_base_url,
             enable_shared_glyph_extraction=False,
-            global_glyph_asset_path=global_glyph_asset_path,
-            global_glyph_map_path=global_glyph_map_path,
-            inline_style=inline_style,
-            inline_script=inline_script,
         )
     finally:
         shutil.rmtree(meta_output_dir, ignore_errors=True)
