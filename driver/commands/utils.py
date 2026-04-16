@@ -184,6 +184,15 @@ def _append_svg_class(attrs: str, class_name: str) -> str:
     return f'{attrs} class="{class_name}"'
 
 
+def _remove_svg_attr(attrs: str, attr_name: str) -> str:
+    return re.sub(
+        rf'\s{attr_name}="[^"]*"',
+        "",
+        attrs,
+        flags=re.IGNORECASE,
+    )
+
+
 def _inject_svg_theme_classes(svg_data: str) -> str:
     def _rewrite_tag(match: re.Match) -> str:
         tag = match.group(1)
@@ -192,23 +201,28 @@ def _inject_svg_theme_classes(svg_data: str) -> str:
             return match.group(0)
 
         classes: List[str] = []
+        attrs_to_remove: Set[str] = set()
 
         fill_match = re.search(r'\sfill="([^"]+)"', attrs, flags=re.IGNORECASE)
         if fill_match:
             fill_value = fill_match.group(1).strip().lower()
             if fill_value in _SVG_THEME_FILL_CLASS_MAP:
                 classes.append(_SVG_THEME_FILL_CLASS_MAP[fill_value])
+                attrs_to_remove.add("fill")
 
         stroke_match = re.search(r'\sstroke="([^"]+)"', attrs, flags=re.IGNORECASE)
         if stroke_match:
             stroke_value = stroke_match.group(1).strip().lower()
             if stroke_value in _SVG_THEME_STROKE_CLASS_MAP:
                 classes.append(_SVG_THEME_STROKE_CLASS_MAP[stroke_value])
+                attrs_to_remove.add("stroke")
 
         if not classes:
             return match.group(0)
 
         updated_attrs = attrs
+        for attr_name in sorted(attrs_to_remove):
+            updated_attrs = _remove_svg_attr(updated_attrs, attr_name)
         for class_name in classes:
             updated_attrs = _append_svg_class(updated_attrs, class_name)
         return f"<{tag}{updated_attrs}>"
