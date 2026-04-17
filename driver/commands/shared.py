@@ -71,7 +71,7 @@ def load_config_data(config_path: str) -> Dict[str, Any]:
     return loaded
 
 
-def resolve_base_url(args: Any) -> str:
+def resolve_base_url(args: Any, required: bool = True) -> Optional[str]:
     config_path = getattr(args, "config", "")
     config_data = load_config_data(config_path)
     base_url_arg = getattr(args, "base_url", None)
@@ -80,9 +80,11 @@ def resolve_base_url(args: Any) -> str:
     elif "base_url" in config_data:
         base_url_raw = config_data["base_url"]
     else:
-        raise RuntimeError(
-            "Missing base_url. Provide --base-url or set base_url in config JSON."
-        )
+        if required:
+            raise RuntimeError(
+                "Missing base_url. Provide --base-url or set base_url in config JSON."
+            )
+        return None
     return str(base_url_raw).rstrip("/")
 
 

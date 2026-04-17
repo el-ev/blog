@@ -323,12 +323,16 @@ def run_compile(args: Namespace) -> None:
 
         print("Compiling Typst project...", file=sys.stderr)
         shared_glyphs = bool(getattr(args, "shared_glyphs", True))
-        base_url = resolve_base_url(args)
-        og_url = page_url(
-            base_url=base_url,
-            root_dir=args.root_dir,
-            dest_dir=output_dirs.html_output_dir,
-            html_filename="index.html",
+        base_url = resolve_base_url(args, required=False)
+        og_url = (
+            page_url(
+                base_url=base_url,
+                root_dir=args.root_dir,
+                dest_dir=output_dirs.html_output_dir,
+                html_filename="index.html",
+            )
+            if base_url
+            else None
         )
         hidden_text = ""
         pdf_href = f"./assets/post.{compile_sources.asset_hash}.pdf"
