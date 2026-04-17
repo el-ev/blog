@@ -21,6 +21,8 @@ html {
     --svg-code-comment: #74747c;
     --svg-code-green: #198810;
     --svg-code-dark-green: #1d6c76;
+    --svg-code-teal: #16718d;
+    --svg-code-dark-red: #301414;
     --svg-code-red: #d73948;
     --svg-code-blue: #4b69c6;
     --svg-code-violet: #8b41b1;
@@ -48,6 +50,8 @@ html {
     --svg-code-comment: #8e97a6;
     --svg-code-green: #86df80;
     --svg-code-dark-green: #74cad3;
+    --svg-code-teal: #6ec7d6;
+    --svg-code-dark-red: #e0b8b8;
     --svg-code-red: #ff8d99;
     --svg-code-blue: #8ca8ff;
     --svg-code-violet: #c792ea;
