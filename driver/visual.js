@@ -1,10 +1,14 @@
 (() => {
   const STORAGE_KEY = 'blog-color-theme';
+  const LAYOUT_STORAGE_KEY = 'blog-layout';
   const LIGHT_THEME = 'light';
   const DARK_THEME = 'dark';
+  const DESKTOP_LAYOUT = 'desktop';
+  const MOBILE_LAYOUT = 'mobile';
   const ACTION_PREFIX = '#action=';
   const COPY_ACTION_PREFIX = 'copy:';
   const THEME_ACTION = 'theme';
+  const LAYOUT_ACTION = 'layout';
   const BOUND_SVG_DOCUMENTS = new WeakSet();
   const SVG_COLOR_TOKENS = [
     '--svg-paper-bg',
@@ -103,6 +107,9 @@
     if (actionToken === THEME_ACTION) {
       return {type: THEME_ACTION};
     }
+    if (actionToken === LAYOUT_ACTION) {
+      return {type: LAYOUT_ACTION};
+    }
     if (actionToken.startsWith(COPY_ACTION_PREFIX)) {
       const uid = actionToken.slice(COPY_ACTION_PREFIX.length).trim();
       if (uid) {
@@ -115,6 +122,10 @@
   const executeSvgAction = (action) => {
     if (action.type === THEME_ACTION) {
       window.toggleColorTheme?.();
+      return;
+    }
+    if (action.type === LAYOUT_ACTION) {
+      window.toggleLayout?.();
       return;
     }
     if (action.type === 'copy') {
@@ -218,6 +229,54 @@
       return;
     }
     applyTheme(theme, true);
+  };
+
+  const resolveLayout = (layout) =>
+      (layout === MOBILE_LAYOUT ? MOBILE_LAYOUT : DESKTOP_LAYOUT);
+
+  const activateLayoutPages = (layout) => {
+    const wrapper = document.querySelector(`.pages-${layout}`);
+    if (!wrapper) {
+      return;
+    }
+    wrapper.querySelectorAll('object.page').forEach((pageObject) => {
+      if (pageObject.getAttribute('data')) {
+        return;
+      }
+      const src = pageObject.getAttribute('data-src');
+      if (src) {
+        pageObject.setAttribute('data', src);
+      }
+    });
+  };
+
+  const applyLayout = (layout, persist = false) => {
+    const resolvedLayout = resolveLayout(layout);
+    document.documentElement.setAttribute('data-layout', resolvedLayout);
+    activateLayoutPages(resolvedLayout);
+    if (persist) {
+      try {
+        window.localStorage?.setItem(LAYOUT_STORAGE_KEY, resolvedLayout);
+      } catch {
+        // noop
+      }
+    }
+  };
+
+  const getCurrentLayout = () =>
+      resolveLayout(document.documentElement.getAttribute('data-layout'));
+
+  window.toggleLayout = () => {
+    const nextLayout =
+        getCurrentLayout() === MOBILE_LAYOUT ? DESKTOP_LAYOUT : MOBILE_LAYOUT;
+    applyLayout(nextLayout, true);
+  };
+
+  window.setLayout = (layout) => {
+    if (layout !== DESKTOP_LAYOUT && layout !== MOBILE_LAYOUT) {
+      return;
+    }
+    applyLayout(layout, true);
   };
 
   const initialTheme = getSavedTheme() || getPreferredTheme();

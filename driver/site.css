@@ -264,6 +264,19 @@ main>div:first-child nav {
     display: block;
 }
 
+.pages {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    width: 100%;
+    max-width: 100%;
+}
+
+html[data-layout="desktop"] .pages-mobile,
+html[data-layout="mobile"] .pages-desktop {
+    display: none;
+}
+
 #copy-toast {
     position: fixed;
     left: 50%;

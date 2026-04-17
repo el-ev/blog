@@ -17,6 +17,7 @@ from .post_entries import is_internal_post_entry
 from .utils import (
     CompileBuildRequest,
     HtmlBuildConfig,
+    MobileCompileConfig,
     compile_html,
     first_desc,
     hash_text_with_paths,
@@ -32,6 +33,7 @@ PostsByDate = Dict[str, List[PostEntry]]
 
 _REVISION_SUFFIX_PATTERN = re.compile(r"-(\d+)$")
 _SITE_TITLE = "Blog"
+_ROOT_SHARED_FILENAMES = ("robots.txt", "favicon.ico")
 
 
 def _append_revision_suffix(post_dir_name: str, title: str) -> str:
@@ -185,13 +187,21 @@ def _build_rss_lines(
 
 
 def update_content(args: Namespace) -> None:
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    root_dir: str = args.root_dir
+    os.makedirs(root_dir, exist_ok=True)
+
+    copied_root_files: Dict[str, str] = {}
+    for filename in _ROOT_SHARED_FILENAMES:
+        dest_path = os.path.join(root_dir, filename)
+        shutil.copy2(os.path.join(base_dir, filename), dest_path)
+        copied_root_files[filename] = dest_path
+
     dest_base_dir = os.path.join(args.root_dir, "posts")
     if not os.path.exists(dest_base_dir):
         return
 
     posts_by_date = _collect_posts_by_date(dest_base_dir)
-
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     template_path = os.path.join(base_dir, "content.template.typ")
     with open(template_path, "r", encoding="utf-8") as f:
         content_template = f.read()
@@ -231,10 +241,6 @@ def update_content(args: Namespace) -> None:
         shared_inputs={"back_href": "./index.html"},
     )
 
-    root_dir: str = args.root_dir
-    os.makedirs(root_dir, exist_ok=True)
-    robots_path = os.path.join(root_dir, "robots.txt")
-    shutil.copy2(os.path.join(base_dir, "robots.txt"), robots_path)
     content_asset_dir = os.path.join(root_dir, "assets")
     asset_context = build_asset_ctx(base_dir, root_dir)
     base_url = resolve_base_url(args)
@@ -252,6 +258,7 @@ def update_content(args: Namespace) -> None:
             asset_hash=asset_hash,
             file_prefix="content",
             typst_inputs=typst_inputs,
+            mobile=MobileCompileConfig(),
             html=HtmlBuildConfig(
                 template_path=html_template,
                 dest_dir=root_dir,
@@ -311,6 +318,7 @@ def update_content(args: Namespace) -> None:
         f.write("\n".join(rss_lines))
 
     print(f"Content page updated in {root_dir}.")
-    print(f"Robots file generated at {robots_path}.")
+    for filename in _ROOT_SHARED_FILENAMES:
+        print(f"{filename} generated at {copied_root_files[filename]}.")
     print(f"Sitemap generated at {sitemap_path}.")
     print(f"RSS feed generated at {rss_path}.")

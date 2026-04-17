@@ -20,6 +20,7 @@ from .shared import (
 from .utils import (
     CompileBuildRequest,
     HtmlBuildConfig,
+    MobileCompileConfig,
     WORKSPACE_PUBLIC_DIR_NAME,
     _query_nodes_from_source,
     build_page_head_title,
@@ -343,6 +344,7 @@ def run_compile(args: Namespace) -> None:
                 asset_hash=compile_sources.asset_hash,
                 file_prefix="post",
                 typst_inputs=typst_inputs,
+                mobile=MobileCompileConfig(),
                 html=HtmlBuildConfig(
                     template_path=os.path.join(base_dir, "index.template.html"),
                     dest_dir=output_dirs.html_output_dir,

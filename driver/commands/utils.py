@@ -8,7 +8,7 @@ import sys
 import json
 import tempfile
 from urllib.parse import parse_qs, unquote, urlparse
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
@@ -137,7 +137,7 @@ a:focus-visible > path {
 class DriverWebAssets:
     stylesheet_path: str
     clipboard_script_path: str
-    theme_script_path: str
+    visual_script_path: str
     inline_style: str
     inline_script: str
 
@@ -178,6 +178,18 @@ class HtmlBuildConfig:
     shared_glyphs: bool = True
     image_source_dir: Optional[str] = None
     site_base_url: Optional[str] = None
+    primary_pages_wrapper_class: str = ""
+    extra_pages_html: str = ""
+
+
+@dataclass(frozen=True)
+class MobileCompileConfig:
+    svg_name_prefix: str = "m-page"
+    paper_width: str = "125mm"
+    paper_height: Optional[str] = "200mm"
+    primary_wrapper_class: str = "pages pages-desktop"
+    wrapper_class: str = "pages pages-mobile"
+    glyph_scope_key: str = "mobile"
 
 
 @dataclass(frozen=True)
@@ -188,6 +200,7 @@ class CompileBuildRequest:
     file_prefix: str
     html: HtmlBuildConfig
     typst_inputs: Optional[TypstInputs] = None
+    mobile: Optional[MobileCompileConfig] = None
 
 
 def make_inputs(
@@ -763,7 +776,7 @@ def _remove_legacy_root_js_files(webroot_dir: str) -> int:
 
     removed_count = 0
     for filename in os.listdir(webroot_dir):
-        if not re.fullmatch(r"(?:clipboard|theme)(?:\.[^.]+)?(?:\.min)?\.js", filename):
+        if not re.fullmatch(r"(?:clipboard|visual)(?:\.[^.]+)?(?:\.min)?\.js", filename):
             continue
         target_path = os.path.join(webroot_dir, filename)
         if os.path.isfile(target_path):
@@ -785,14 +798,14 @@ def build_web_assets(driver_dir: str, webroot_dir: str) -> DriverWebAssets:
 
     stylesheet_src_path = os.path.join(driver_dir, "site.css")
     clipboard_src_path = os.path.join(driver_dir, "clipboard.js")
-    theme_src_path = os.path.join(driver_dir, "theme.js")
+    visual_src_path = os.path.join(driver_dir, "visual.js")
 
     with open(stylesheet_src_path, "r", encoding="utf-8") as f:
         stylesheet_source = f.read().strip() + "\n"
     with open(clipboard_src_path, "r", encoding="utf-8") as f:
         clipboard_source = f.read()
-    with open(theme_src_path, "r", encoding="utf-8") as f:
-        theme_source = f.read()
+    with open(visual_src_path, "r", encoding="utf-8") as f:
+        visual_source = f.read()
 
     stylesheet_asset_path = _write_hashed_asset(
         asset_dir=assets_dir,
@@ -806,11 +819,11 @@ def build_web_assets(driver_dir: str, webroot_dir: str) -> DriverWebAssets:
         suffix=".min.js",
         content=_minify_js_source(clipboard_source),
     )
-    theme_asset_path = _write_hashed_asset(
+    visual_asset_path = _write_hashed_asset(
         asset_dir=assets_dir,
-        prefix="theme",
+        prefix="visual",
         suffix=".min.js",
-        content=_minify_js_source(theme_source),
+        content=_minify_js_source(visual_source),
     )
 
     inline_style_src_path = os.path.join(driver_dir, "inline-style.css")
@@ -824,7 +837,7 @@ def build_web_assets(driver_dir: str, webroot_dir: str) -> DriverWebAssets:
     web_assets = DriverWebAssets(
         stylesheet_path=stylesheet_asset_path,
         clipboard_script_path=clipboard_asset_path,
-        theme_script_path=theme_asset_path,
+        visual_script_path=visual_asset_path,
         inline_style=_minify_css_source(inline_style_source),
         inline_script=_minify_js_source(inline_script_source),
     )
@@ -1701,8 +1714,11 @@ def apply_glyph_map(root_dir: str, target_dirs: List[str]) -> Optional[str]:
         if not os.path.isdir(directory):
             continue
         for filename in sorted(os.listdir(directory)):
-            if _is_generated_svg(filename, "page") or _is_generated_svg(
-                filename, "meta-page"
+            if (
+                _is_generated_svg(filename, "page")
+                or _is_generated_svg(filename, "m-page")
+                or _is_generated_svg(filename, "meta-page")
+                or _is_generated_svg(filename, "m-meta-page")
             ):
                 svg_paths.append(os.path.join(directory, filename))
 
@@ -2586,6 +2602,99 @@ def _build_open_graph_metadata(
     return "\n    ".join(metadata_lines)
 
 
+def _process_svg_set(
+    *,
+    source_dir: str,
+    asset_dir: str,
+    html_dir: str,
+    svg_name_prefix: str,
+    asset_hash: Optional[str],
+    title_format: str,
+    svg_href_rewrites: Optional[Dict[str, str]],
+    site_base_url: Optional[str],
+    image_source_dir: Optional[str],
+    action_metadata: Optional[Dict[str, Dict[str, str]]],
+    shared_glyphs: bool,
+    glyph_scope_key: str,
+    asset_context: DriverAssetContext,
+    page_count_limit: Optional[int] = None,
+) -> Tuple[List[str], Optional[str], Dict[str, str]]:
+    svg_files = sorted(
+        f
+        for f in os.listdir(source_dir)
+        if _is_generated_svg(f, svg_name_prefix)
+    )
+    if page_count_limit:
+        svg_files = svg_files[:page_count_limit]
+
+    current_svg_set = set(svg_files)
+    cleanup_dirs = [asset_dir]
+    if os.path.abspath(asset_dir) != os.path.abspath(html_dir):
+        cleanup_dirs.append(html_dir)
+    for cleanup_dir in cleanup_dirs:
+        if not os.path.isdir(cleanup_dir):
+            continue
+        for filename in os.listdir(cleanup_dir):
+            if (
+                _is_generated_svg(filename, svg_name_prefix)
+                and filename not in current_svg_set
+            ):
+                os.remove(os.path.join(cleanup_dir, filename))
+
+    image_asset_names: Dict[str, str] = {}
+    patched_svg_paths: List[str] = []
+    page_titles: List[str] = []
+    for i, filename in enumerate(svg_files, start=1):
+        src_path = os.path.join(source_dir, filename)
+        dst_path = os.path.join(asset_dir, filename)
+        patch_svg_file(
+            src_path,
+            dst_path,
+            svg_href_rewrites,
+            href_base_dir=html_dir,
+            site_base_url=site_base_url,
+            image_source_dir=image_source_dir,
+            asset_hash=asset_hash,
+            image_asset_names=image_asset_names,
+            action_metadata=action_metadata,
+        )
+        patched_svg_paths.append(dst_path)
+        page_titles.append(title_format.replace("{i}", str(i)))
+
+    glyph_asset_path: Optional[str] = None
+    if shared_glyphs:
+        glyph_asset_path = _extract_and_rewrite_shared_svg_glyphs(
+            patched_svg_paths,
+            dest_dir=asset_dir,
+            glyph_scope_key=glyph_scope_key,
+            global_glyph_asset_path=asset_context.global_glyph_asset_path,
+            global_glyph_map_path=asset_context.global_glyph_map_path,
+        )
+
+    for svg_path in patched_svg_paths:
+        _optimize_svg_with_normalized_href(
+            svg_path,
+            site_base_url=site_base_url,
+            action_metadata=action_metadata,
+        )
+    if shared_glyphs and glyph_asset_path:
+        _optimize_svg_with_normalized_href(
+            glyph_asset_path,
+            preserve_ids=True,
+            site_base_url=site_base_url,
+        )
+
+    page_links: List[str] = []
+    for svg_path, page_title in zip(patched_svg_paths, page_titles):
+        page_href = f"./{WEB_ASSETS_DIR_NAME}/{_build_asset_rel_path(svg_path)}"
+        page_links.append(
+            f'<object class="page" type="image/svg+xml" data-src="{html.escape(page_href, quote=True)}" '
+            f'title="{page_title}"></object>'
+        )
+
+    return page_links, glyph_asset_path, image_asset_names
+
+
 def build_html_from_svgs(
     config: HtmlBuildConfig,
     output_dir: str,
@@ -2600,54 +2709,26 @@ def build_html_from_svgs(
     index_path = os.path.join(config.dest_dir, config.html_filename)
     html_dir = os.path.dirname(index_path)
     page_asset_dir = config.asset_dest_dir or config.dest_dir
-    page_links_list: List[str] = []
-    page_render_items: List[Tuple[str, str]] = []
-    patched_svg_paths: List[str] = []
     os.makedirs(config.dest_dir, exist_ok=True)
     os.makedirs(page_asset_dir, exist_ok=True)
-    image_asset_names: Dict[str, str] = {}
 
-    svg_files = sorted(
-        f
-        for f in os.listdir(output_dir)
-        if _is_generated_svg(f, config.svg_name_prefix)
+    glyph_scope = config.glyph_scope_key or config.svg_name_prefix
+    page_links_list, glyph_asset_path, image_asset_names = _process_svg_set(
+        source_dir=output_dir,
+        asset_dir=page_asset_dir,
+        html_dir=html_dir,
+        svg_name_prefix=config.svg_name_prefix,
+        asset_hash=asset_hash,
+        title_format=config.title_format,
+        svg_href_rewrites=config.svg_href_rewrites,
+        site_base_url=config.site_base_url,
+        image_source_dir=config.image_source_dir,
+        action_metadata=action_metadata,
+        shared_glyphs=config.shared_glyphs,
+        glyph_scope_key=glyph_scope,
+        asset_context=config.asset_context,
+        page_count_limit=page_count if page_count else None,
     )
-    if page_count:
-        svg_files = svg_files[:page_count]
-
-    current_svg_set = set(svg_files)
-    cleanup_dirs = [page_asset_dir]
-    if os.path.abspath(page_asset_dir) != os.path.abspath(config.dest_dir):
-        cleanup_dirs.append(config.dest_dir)
-    for cleanup_dir in cleanup_dirs:
-        if not os.path.isdir(cleanup_dir):
-            continue
-        for filename in os.listdir(cleanup_dir):
-            if (
-                _is_generated_svg(filename, config.svg_name_prefix)
-                and filename not in current_svg_set
-            ):
-                os.remove(os.path.join(cleanup_dir, filename))
-
-    for i, filename in enumerate(svg_files, start=1):
-        src_path = os.path.join(output_dir, filename)
-        dst_path = os.path.join(page_asset_dir, filename)
-
-        patch_svg_file(
-            src_path,
-            dst_path,
-            config.svg_href_rewrites,
-            href_base_dir=html_dir,
-            site_base_url=config.site_base_url,
-            image_source_dir=config.image_source_dir,
-            asset_hash=asset_hash,
-            image_asset_names=image_asset_names,
-            action_metadata=action_metadata,
-        )
-        patched_svg_paths.append(dst_path)
-
-        page_title = config.title_format.replace("{i}", str(i))
-        page_render_items.append((dst_path, page_title))
 
     if config.image_source_dir is not None and asset_hash is not None:
         _remove_stale_generated_driver_image_assets(
@@ -2655,39 +2736,18 @@ def build_html_from_svgs(
             keep_filenames=set(image_asset_names.values()),
         )
 
-    glyph_asset_path: Optional[str] = None
-    if config.shared_glyphs:
-        glyph_scope = config.glyph_scope_key or config.svg_name_prefix
-        glyph_asset_path = _extract_and_rewrite_shared_svg_glyphs(
-            patched_svg_paths,
-            dest_dir=page_asset_dir,
-            glyph_scope_key=glyph_scope,
-            global_glyph_asset_path=config.asset_context.global_glyph_asset_path,
-            global_glyph_map_path=config.asset_context.global_glyph_map_path,
+    primary_pages_html = "\n".join(page_links_list)
+    if config.primary_pages_wrapper_class:
+        primary_pages_html = (
+            f'<div class="{config.primary_pages_wrapper_class}">\n'
+            f"{primary_pages_html}\n"
+            f"</div>"
         )
+    full_pages_html = primary_pages_html
+    if config.extra_pages_html:
+        full_pages_html = full_pages_html + "\n" + config.extra_pages_html
 
-    for svg_path in patched_svg_paths:
-        _optimize_svg_with_normalized_href(
-            svg_path,
-            site_base_url=config.site_base_url,
-            action_metadata=action_metadata,
-        )
-    if config.shared_glyphs and glyph_asset_path:
-        _optimize_svg_with_normalized_href(
-            glyph_asset_path,
-            preserve_ids=True,
-            site_base_url=config.site_base_url,
-        )
-
-    for svg_path, page_title in page_render_items:
-        page_href = f"./{WEB_ASSETS_DIR_NAME}/{_build_asset_rel_path(svg_path)}"
-        page_links_list.append(
-            f'<object class="page" type="image/svg+xml" data="{html.escape(page_href, quote=True)}" '
-            f'title="{page_title}"></object>'
-        )
-
-    page_links = "\n".join(page_links_list)
-    index_content = template.replace("{{PAGES}}", page_links)
+    index_content = template.replace("{{PAGES}}", full_pages_html)
     index_content = index_content.replace(
         "{{INLINE_STYLE}}",
         (
@@ -2742,14 +2802,14 @@ def build_html_from_svgs(
     clipboard_src = build_root_asset_href(
         config.asset_context.web_assets.clipboard_script_path
     )
-    theme_src = build_root_asset_href(config.asset_context.web_assets.theme_script_path)
+    visual_src = build_root_asset_href(config.asset_context.web_assets.visual_script_path)
     index_content = index_content.replace(
         "{{STYLESHEET_SRC}}", html.escape(stylesheet_src)
     )
     index_content = index_content.replace(
         "{{CLIPBOARD_SRC}}", html.escape(clipboard_src)
     )
-    index_content = index_content.replace("{{THEME_SRC}}", html.escape(theme_src))
+    index_content = index_content.replace("{{VISUAL_SRC}}", html.escape(visual_src))
     rss_feed_link = ""
     if config.rss_feed_path:
         rss_feed_href = build_relative_href(
@@ -2816,6 +2876,22 @@ def compile_html(request: CompileBuildRequest) -> str:
         inputs=svg_in,
     )
 
+    if request.mobile is not None:
+        m_inputs = dict(svg_in)
+        m_inputs["paper_width"] = request.mobile.paper_width
+        if request.mobile.paper_height:
+            m_inputs["paper_height"] = request.mobile.paper_height
+        m_inputs["mobile"] = "true"
+        m_prefix = (
+            f"{request.mobile.svg_name_prefix}{{0p}}.{request.asset_hash}.svg"
+        )
+        run_typst_compile(
+            request.source_bytes,
+            os.path.join(request.output_dir, m_prefix),
+            export_format="svg",
+            inputs=m_inputs,
+        )
+
     pdf_path = os.path.join(request.output_dir, pdf_name)
     run_typst_compile(
         request.source_bytes,
@@ -2852,8 +2928,40 @@ def compile_html(request: CompileBuildRequest) -> str:
             "tabindex": str(item.get("tabindex") or ""),
         }
 
+    html_config = request.html
+    if request.mobile is not None:
+        html_dir = os.path.dirname(
+            os.path.join(request.html.dest_dir, request.html.html_filename)
+        )
+        page_asset_dir = request.html.asset_dest_dir or request.html.dest_dir
+        m_page_links, _, _ = _process_svg_set(
+            source_dir=request.output_dir,
+            asset_dir=page_asset_dir,
+            html_dir=html_dir,
+            svg_name_prefix=request.mobile.svg_name_prefix,
+            asset_hash=request.asset_hash,
+            title_format=request.html.title_format,
+            svg_href_rewrites=request.html.svg_href_rewrites,
+            site_base_url=request.html.site_base_url,
+            image_source_dir=request.html.image_source_dir,
+            action_metadata=action_meta,
+            shared_glyphs=request.html.shared_glyphs,
+            glyph_scope_key=request.mobile.glyph_scope_key,
+            asset_context=request.html.asset_context,
+        )
+        mobile_html = (
+            f'<div class="{request.mobile.wrapper_class}">\n'
+            f'{chr(10).join(m_page_links)}\n'
+            f"</div>"
+        )
+        html_config = replace(
+            request.html,
+            extra_pages_html=mobile_html,
+            primary_pages_wrapper_class=request.mobile.primary_wrapper_class,
+        )
+
     return build_html_from_svgs(
-        config=request.html,
+        config=html_config,
         output_dir=request.output_dir,
         page_count=page_count,
         pdf_path=pdf_path,

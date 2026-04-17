@@ -10,6 +10,7 @@ from .utils import (
     CompileBuildRequest,
     DriverAssetContext,
     HtmlBuildConfig,
+    MobileCompileConfig,
     compile_html,
     hash_text_with_paths,
     make_raw_copy_id,
@@ -185,6 +186,10 @@ def compile_meta_page(request: MetaPageRequest) -> None:
                 asset_hash=meta_hash,
                 file_prefix="meta",
                 typst_inputs=typst_inputs,
+                mobile=MobileCompileConfig(
+                    svg_name_prefix="m-meta-page",
+                    glyph_scope_key="meta-mobile",
+                ),
                 html=HtmlBuildConfig(
                     template_path=os.path.join(request.base_dir, "index.template.html"),
                     dest_dir=request.dest_dir,

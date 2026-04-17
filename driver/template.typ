@@ -5,6 +5,10 @@
   default: datetime.today().display("[year]-[month]-[day]"),
 )
 
+#let _paper_width_input = sys.inputs.at("paper_width", default: none)
+#let _paper_height_input = sys.inputs.at("paper_height", default: none)
+#let _mobile = sys.inputs.at("mobile", default: "false") == "true"
+
 #let justify_align(left_body, right_body) = {
   block(
     width: 100%,
@@ -47,8 +51,20 @@
   if title != none {
     set document(title: title)
   }
+  let page_size_args = if _paper_width_input != none {
+    (
+      width: eval(_paper_width_input),
+      height: if _paper_height_input != none {
+        eval(_paper_height_input)
+      } else {
+        auto
+      },
+    )
+  } else {
+    (paper: "iso-b5")
+  }
   set page(
-    paper: "iso-b5",
+    ..page_size_args,
     margin: page_margin,
     footer: [
       #set text(fill: gray, size: 10pt)
@@ -178,10 +194,18 @@
         content
       }
     } else {
-      let content = box(fill: luma(245), inset: (x: 0.2em), outset: (y: 0.2em), radius: 0.2em)[
-        #set text(fill: luma(20))
-        #it
-      ]
+      let content = if _mobile {
+        let broken = it.text.clusters().join("\u{200B}")
+        highlight(fill: luma(245), extent: 0.15em, top-edge: "ascender", bottom-edge: "descender")[
+          #set text(fill: luma(20), font: ("DejaVu Sans Mono", "Menlo", "Consolas"))
+          #broken
+        ]
+      } else {
+        box(fill: luma(245), inset: (x: 0.2em), outset: (y: 0.2em), radius: 0.2em)[
+          #set text(fill: luma(20))
+          #it
+        ]
+      }
       if raw_copy_enabled {
         copy_action(content, it.text, skip_tab: true)
       } else {

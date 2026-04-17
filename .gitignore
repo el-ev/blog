@@ -4,3 +4,4 @@ workspace/
 build/
 config.json
 .amend-workspace-*
+.playwright-cli/
