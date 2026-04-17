@@ -997,33 +997,6 @@ def _run_typst_query_json(
 
     return data
 
-def extract_typst_links(
-    main_typ_path: str,
-    query_root: str,
-    inputs: Optional[Dict[str, str]] = None,
-) -> List[Tuple[str, str]]:
-    links: List[Tuple[str, str]] = []
-    seen: Set[str] = set()
-    for item in _query_nodes(
-        main_typ_path=main_typ_path,
-        query_root=query_root,
-        selector="link",
-        inputs=inputs,
-    ):
-        href = str(item["dest"])
-        if not href or href in seen:
-            continue
-
-        label = re.sub(r"\s+", " ", _flatten_query_text(item["body"])).strip()
-        if not label:
-            label = href
-
-        seen.add(href)
-        links.append((href, label))
-
-    return links
-
-
 def _extract_typst_table_rows(
     table_payload: Dict[str, Any],
 ) -> List[List[Dict[str, Any]]]:

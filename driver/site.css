@@ -228,7 +228,32 @@ main>div:first-child .subtitle {
     line-height: 1.4;
 }
 
-main>div:first-child blockquote.info-block {
+main>div:first-child blockquote {
+    margin: 0 0 12px;
+    padding: 0.7em 1em;
+    border-left: 0.2em solid var(--svg-muted-stroke);
+    border-radius: 0 4px 4px 0;
+}
+
+main>div:first-child blockquote p {
+    margin: 0;
+}
+
+main>div:first-child blockquote p+p {
+    margin-top: 8px;
+}
+
+main>div:first-child blockquote footer {
+    margin-top: 6px;
+    font-size: 0.88em;
+    color: var(--svg-muted-text);
+}
+
+main>div:first-child blockquote footer::before {
+    content: "\2014\00a0";
+}
+
+main>div:first-child aside {
     margin: 0 0 12px;
     padding: 0.7em 1em;
     background: var(--svg-surface-bg);
@@ -236,12 +261,12 @@ main>div:first-child blockquote.info-block {
     border-radius: 0 4px 4px 0;
 }
 
-main>div:first-child blockquote.info-block p {
+main>div:first-child aside p {
     margin: 0;
     color: var(--text-color);
 }
 
-main>div:first-child blockquote.info-block p+p {
+main>div:first-child aside p+p {
     margin-top: 8px;
 }
 

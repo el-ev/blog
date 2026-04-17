@@ -11,36 +11,27 @@ from .utils import (
 )
 
 
-def _embed_links_in_text_fragment(
+def _embed_links_in_text(
     text: str,
-    source_links: List[Tuple[str, str]],
+    links: List[Tuple[str, str]],
 ) -> str:
-    """Embed links into a text fragment, skipping occurrences already inside anchors."""
-    for href, label in source_links:
-        if not href:
-            continue
-        clean_label = label.strip()
-        if not clean_label:
-            continue
-        escaped_label = html.escape(clean_label)
+    """Embed scoped links into an HTML text fragment."""
+    for href, label in links:
+        escaped_label = html.escape(label)
         if escaped_label not in text:
             continue
         safe_href = html.escape(href, quote=True)
         anchor = f'<a href="{safe_href}" tabindex="-1">{escaped_label}</a>'
-        search_pos = 0
-        while True:
-            idx = text.find(escaped_label, search_pos)
-            if idx == -1:
-                break
-            before = text[:idx]
-            inside_anchor = (
-                before.count("<a ") + before.count("<a>") > before.count("</a>")
-            )
-            if inside_anchor:
-                search_pos = idx + len(escaped_label)
-                continue
-            text = text[:idx] + anchor + text[idx + len(escaped_label) :]
-            break
+        idx = text.find(escaped_label)
+        if idx == -1:
+            continue
+        before = text[:idx]
+        inside_anchor = (
+            before.count("<a ") + before.count("<a>") > before.count("</a>")
+        )
+        if inside_anchor:
+            continue
+        text = text[:idx] + anchor + text[idx + len(escaped_label) :]
     return text
 
 
@@ -111,16 +102,185 @@ def _format_numbering(n: int, fmt: str) -> str:
     return str(n)
 
 
-def flatten_doc_node_to_html(node: Any) -> str:
+_UNICODE_TO_TYPST: Dict[str, str] = {
+    "\u222b": "integral",
+    "\u221e": "infinity",
+    "\u2211": "sum",
+    "\u220f": "product",
+    "\u2192": "->",
+    "\u2190": "<-",
+    "\u21d2": "=>",
+    "\u21d0": "<=",
+    "\u2264": "<=",
+    "\u2265": ">=",
+    "\u2260": "!=",
+    "\u2248": "approx",
+    "\u00b1": "plus.minus",
+    "\u2213": "minus.plus",
+    "\u00d7": "times",
+    "\u00f7": "div",
+    "\u2218": "compose",
+    "\u2229": "sect",
+    "\u222a": "union",
+    "\u2286": "subset.eq",
+    "\u2287": "supset.eq",
+    "\u2282": "subset",
+    "\u2283": "supset",
+    "\u2208": "in",
+    "\u2209": "not in",
+    "\u2200": "forall",
+    "\u2203": "exists",
+    "\u2205": "emptyset",
+    "\u2026": "...",
+    "\u22ef": "dots.c",
+    "\u22ee": "dots.v",
+    "\u22f0": "dots.up",
+    "\u22f1": "dots.down",
+    "\u2207": "nabla",
+    "\u2202": "diff",
+    "\u03b1": "alpha",
+    "\u03b2": "beta",
+    "\u03b3": "gamma",
+    "\u03b4": "delta",
+    "\u03b5": "epsilon",
+    "\u03b6": "zeta",
+    "\u03b7": "eta",
+    "\u03b8": "theta",
+    "\u03b9": "iota",
+    "\u03ba": "kappa",
+    "\u03bb": "lambda",
+    "\u03bc": "mu",
+    "\u03bd": "nu",
+    "\u03be": "xi",
+    "\u03c0": "pi",
+    "\u03c1": "rho",
+    "\u03c3": "sigma",
+    "\u03c4": "tau",
+    "\u03c5": "upsilon",
+    "\u03c6": "phi",
+    "\u03c7": "chi",
+    "\u03c8": "psi",
+    "\u03c9": "omega",
+    "\u0393": "Gamma",
+    "\u0394": "Delta",
+    "\u0398": "Theta",
+    "\u039b": "Lambda",
+    "\u039e": "Xi",
+    "\u03a0": "Pi",
+    "\u03a3": "Sigma",
+    "\u03a6": "Phi",
+    "\u03a8": "Psi",
+    "\u03a9": "Omega",
+    "\u2102": "CC",
+    "\u2115": "NN",
+    "\u211a": "QQ",
+    "\u211d": "RR",
+    "\u2124": "ZZ",
+}
+
+
+def _serialize_math(node: Any) -> str:
+    if isinstance(node, str):
+        return node
+    if isinstance(node, list):
+        return "".join(_serialize_math(item) for item in node)
+    if not isinstance(node, dict):
+        return ""
+    func = node.get("func")
+    if func == "text":
+        return node.get("text", "")
+    if func == "symbol":
+        sym = node.get("text", "")
+        return _UNICODE_TO_TYPST.get(sym, sym)
+    if func == "space":
+        return " "
+    if func == "linebreak":
+        return " "
+    if func == "sequence":
+        return "".join(_serialize_math(c) for c in node.get("children", []))
+    if func == "attach":
+        base = _serialize_math(node.get("base", ""))
+        sup = node.get("t")
+        sub = node.get("b")
+        result = base
+        if sub is not None:
+            s = _serialize_math(sub)
+            result += f"_{s}" if len(s) == 1 else f"_({s})"
+        if sup is not None:
+            s = _serialize_math(sup)
+            result += f"^{s}" if len(s) == 1 else f"^({s})"
+        return result
+    if func == "frac":
+        num = _serialize_math(node.get("num", ""))
+        denom = _serialize_math(node.get("denom", ""))
+        return f"({num}) / ({denom})"
+    if func == "root":
+        radicand = _serialize_math(node.get("radicand", ""))
+        index = node.get("index")
+        if index is not None:
+            return f"root({_serialize_math(index)}, {radicand})"
+        return f"sqrt({radicand})"
+    if func == "binom":
+        upper = _serialize_math(node.get("upper", ""))
+        lower = _serialize_math(node.get("lower", ""))
+        return f"binom({upper}, {lower})"
+    if func == "lr":
+        return _serialize_math(node.get("body", ""))
+    if func == "op":
+        return _serialize_math(node.get("text", ""))
+    if func == "styled":
+        return _serialize_math(node.get("child", ""))
+    if func == "h":
+        return " "
+    if func == "accent":
+        base = _serialize_math(node.get("base", ""))
+        accent_char = node.get("accent", {})
+        if isinstance(accent_char, dict):
+            accent_char = accent_char.get("text", "")
+        return f"{base}\u0302" if accent_char == "\u0302" else f"accent({base})"
+    if func == "vec" or func == "mat":
+        children = node.get("children", [])
+        items = ", ".join(_serialize_math(c) for c in children)
+        return f"{func}({items})"
+    parts: List[str] = []
+    text_val = node.get("text")
+    if isinstance(text_val, str):
+        parts.append(text_val)
+    for key in ("body", "children", "child", "value", "num", "denom"):
+        if key in node:
+            parts.append(_serialize_math(node[key]))
+    return "".join(parts)
+
+
+def _collect_emphasis_text(
+    emphasis_elems: List[Dict[str, Any]],
+) -> Dict[str, str]:
+    """Build a map from flattened text → HTML tag for strong/emph elements."""
+    result: Dict[str, str] = {}
+    for elem in emphasis_elems:
+        t = elem.get("t")
+        tag = "strong" if t == "b" else "em" if t == "i" else None
+        if not tag:
+            continue
+        text = _flatten_query_text(elem.get("b", "")).strip()
+        if text:
+            result[text] = tag
+    return result
+
+
+def flatten_doc_node_to_html(
+    node: Any,
+    emphasis_map: Optional[Dict[str, str]] = None,
+) -> str:
     """Recursively convert a Typst JSON content node to an HTML string.
 
     Handles link → <a>, inline raw → <code>, block raw → <pre><code>,
-    smartquote, space, linebreak, and styled/sequence wrappers.
+    smartquote, space, linebreak, styled (strong/emph), and sequence wrappers.
     """
     if isinstance(node, str):
         return html.escape(node)
     if isinstance(node, list):
-        return "".join(flatten_doc_node_to_html(item) for item in node)
+        return "".join(flatten_doc_node_to_html(item, emphasis_map) for item in node)
     if isinstance(node, dict):
         func = node.get("func")
         if func == "space":
@@ -130,9 +290,16 @@ def flatten_doc_node_to_html(node: Any) -> str:
         if func == "smartquote":
             c = '"' if node.get("double") else "'"
             return html.escape(c)
+        if func == "styled" and emphasis_map:
+            inner = flatten_doc_node_to_html(node.get("child", ""), emphasis_map)
+            inner_text = _flatten_query_text(node.get("child", "")).strip()
+            tag = emphasis_map.get(inner_text)
+            if tag:
+                return f"<{tag}>{inner}</{tag}>"
+            return inner
         if func == "link":
             dest = node.get("dest", "")
-            body_html = flatten_doc_node_to_html(node.get("body", ""))
+            body_html = flatten_doc_node_to_html(node.get("body", ""), emphasis_map)
             dest_escaped = html.escape(str(dest), quote=True)
             return f'<a href="{dest_escaped}" tabindex="-1">{body_html}</a>'
         if func == "raw":
@@ -149,13 +316,13 @@ def flatten_doc_node_to_html(node: Any) -> str:
             parts.append(html.escape(text_val))
         for key in ("body", "children", "child", "value", "values", "content"):
             if key in node:
-                parts.append(flatten_doc_node_to_html(node[key]))
+                parts.append(flatten_doc_node_to_html(node[key], emphasis_map))
         if not parts:
             for key, value in node.items():
                 if key in ("func", "text"):
                     continue
                 if isinstance(value, (dict, list)):
-                    parts.append(flatten_doc_node_to_html(value))
+                    parts.append(flatten_doc_node_to_html(value, emphasis_map))
         return "".join(parts)
     return ""
 
@@ -166,7 +333,6 @@ def build_hidden_text(
     post_subtitle: Optional[str],
     asset_hash: str,
     nav_links: Optional[List[Tuple[str, str]]] = None,
-    source_links: Optional[List[Tuple[str, str]]] = None,
 ) -> str:
     """Build sr-only HTML from an ordered list of <driver-doc> metadata elements."""
     parts: List[str] = []
@@ -188,6 +354,28 @@ def build_hidden_text(
 
     # Per-kind figure counters (for caption labels like "Figure 1:")
     fig_counts: Dict[str, int] = {}
+
+    # Build per-element link map: lnk nodes follow their parent element,
+    # so collect them and associate with the preceding text-bearing element.
+    elem_links: Dict[int, List[Tuple[str, str]]] = {}
+    last_text_idx: Optional[int] = None
+    for i, elem in enumerate(doc_elements):
+        t = elem.get("t")
+        if t == "lnk":
+            href = elem.get("href", "")
+            if not href or href.startswith("#action="):
+                continue
+            label = re.sub(
+                r"\s+", " ", _flatten_query_text(elem.get("b", ""))
+            ).strip()
+            if not label:
+                continue
+            if last_text_idx is not None:
+                elem_links.setdefault(last_text_idx, []).append((href, label))
+        elif t in ("par", "li", "eli", "h", "blockquote", "info", "dt"):
+            last_text_idx = i
+        elif t not in ("b", "i", "raw", "eq-il"):
+            last_text_idx = None
 
     def flush_list() -> None:
         if not list_items:
@@ -216,16 +404,26 @@ def build_hidden_text(
         num_str = _format_numbering(n, fmt)
         return f"{sup_text}\u00a0{num_str}{sep_text}"
 
-    for elem in doc_elements:
+    emphasis_map = _collect_emphasis_text(
+        [e for e in doc_elements if e.get("t") in ("b", "i")]
+    )
+
+    for elem_idx, elem in enumerate(doc_elements):
         t = elem.get("t")
+
+        # Link metadata nodes are consumed above; skip in main loop
+        if t == "lnk":
+            continue
 
         # Skip initial page_header PARs (subtitle + date)
         if t == "par" and skipped_pars < skip_count:
             skipped_pars += 1
             continue
 
-        # Inline raws are already embedded in their parent element
+        # Inline raws and emphasis markers are handled by their parent
         if t == "raw" and not elem.get("bl"):
+            continue
+        if t in ("b", "i"):
             continue
 
         # Any non-list element flushes the pending list buffer
@@ -234,16 +432,19 @@ def build_hidden_text(
             list_tag = None
 
         if t == "h":
-            # Offset Typst heading levels by 1 (title is <h1>, sections are <h2>+)
             level = min(elem.get("l", 1) + 1, 6)
-            body_html = flatten_doc_node_to_html(elem.get("b", ""))
+            body_html = flatten_doc_node_to_html(elem.get("b", ""), emphasis_map)
+            links = elem_links.get(elem_idx)
+            if links:
+                body_html = _embed_links_in_text(body_html, links)
             parts.append(f"<h{level}>{body_html}</h{level}>")
 
         elif t == "par":
-            body_html = flatten_doc_node_to_html(elem.get("b", "")).strip()
+            body_html = flatten_doc_node_to_html(elem.get("b", ""), emphasis_map).strip()
             if body_html:
-                if source_links:
-                    body_html = _embed_links_in_text_fragment(body_html, source_links)
+                links = elem_links.get(elem_idx)
+                if links:
+                    body_html = _embed_links_in_text(body_html, links)
                 parts.append(f"<p>{body_html}</p>")
 
         elif t == "raw":  # block raw (bl=True checked above)
@@ -256,48 +457,73 @@ def build_hidden_text(
             )
 
         elif t == "info":
-            body_html = flatten_doc_node_to_html(elem.get("b", ""))
+            body_html = flatten_doc_node_to_html(elem.get("b", ""), emphasis_map)
             body_html = re.sub(r"\s+", " ", body_html).strip()
+            links = elem_links.get(elem_idx)
+            if links:
+                body_html = _embed_links_in_text(body_html, links)
             parts.append(
-                f'<blockquote class="info-block"><p>{body_html}</p></blockquote>'
+                f"<aside><p>{body_html}</p></aside>"
             )
 
         elif t == "li":
             if list_tag != "ul":
                 flush_list()
                 list_tag = "ul"
-            body_html = flatten_doc_node_to_html(elem.get("b", "")).strip()
-            if source_links:
-                body_html = _embed_links_in_text_fragment(body_html, source_links)
+            body_html = flatten_doc_node_to_html(elem.get("b", ""), emphasis_map).strip()
+            links = elem_links.get(elem_idx)
+            if links:
+                body_html = _embed_links_in_text(body_html, links)
             list_items.append(f"<li>{body_html}</li>")
 
         elif t == "eli":
             if list_tag != "ol":
                 flush_list()
                 list_tag = "ol"
-            body_html = flatten_doc_node_to_html(elem.get("b", "")).strip()
-            if source_links:
-                body_html = _embed_links_in_text_fragment(body_html, source_links)
+            body_html = flatten_doc_node_to_html(elem.get("b", ""), emphasis_map).strip()
+            links = elem_links.get(elem_idx)
+            if links:
+                body_html = _embed_links_in_text(body_html, links)
             list_items.append(f"<li>{body_html}</li>")
 
         elif t == "dt":
-            term_html = flatten_doc_node_to_html(elem.get("term", "")).strip()
-            desc_html = flatten_doc_node_to_html(elem.get("b", "")).strip()
+            term_html = flatten_doc_node_to_html(elem.get("term", ""), emphasis_map).strip()
+            desc_html = flatten_doc_node_to_html(elem.get("b", ""), emphasis_map).strip()
+            links = elem_links.get(elem_idx)
+            if links:
+                term_html = _embed_links_in_text(term_html, links)
+                desc_html = _embed_links_in_text(desc_html, links)
             parts.append(f"<dl><dt>{term_html}</dt><dd>{desc_html}</dd></dl>")
 
         elif t == "blockquote":
-            body_html = flatten_doc_node_to_html(elem.get("b", "")).strip()
-            parts.append(f"<blockquote><p>{body_html}</p></blockquote>")
+            body_html = flatten_doc_node_to_html(elem.get("b", ""), emphasis_map).strip()
+            links = elem_links.get(elem_idx)
+            if links:
+                body_html = _embed_links_in_text(body_html, links)
+            attr = elem.get("attr")
+            attr_html = ""
+            if attr is not None:
+                attr_text = flatten_doc_node_to_html(attr).strip()
+                if attr_text:
+                    attr_html = f"<footer>{attr_text}</footer>"
+            parts.append(f"<blockquote><p>{body_html}</p>{attr_html}</blockquote>")
 
-        elif t == "eq":
+        elif t == "eq" or t == "eq-il":
             alt = elem.get("alt")
             if isinstance(alt, str) and alt.strip():
                 eq_text = html.escape(alt.strip())
             else:
                 eq_text = html.escape(
-                    re.sub(r"\s+", " ", _flatten_query_text(elem.get("b", ""))).strip()
+                    re.sub(r"\s+", " ", _serialize_math(elem.get("b", ""))).strip()
                 )
-            parts.append(f"<p><code>{eq_text}</code></p>")
+            if t == "eq-il":
+                code_frag = f"<code>${eq_text}$</code>"
+                if parts and parts[-1].startswith("<p>") and parts[-1].endswith("</p>"):
+                    parts[-1] = parts[-1][:-4] + " " + code_frag + "</p>"
+                else:
+                    parts.append(code_frag)
+            else:
+                parts.append(f"<p><code>$ {eq_text} $</code></p>")
 
         elif t == "fig":
             body = elem.get("b", {})

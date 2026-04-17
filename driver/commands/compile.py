@@ -28,7 +28,6 @@ from .utils import (
     first_desc,
     decl_str,
     need_decl_str,
-    extract_typst_links,
     prev_rev,
     make_temp_dir,
     make_inputs,
@@ -317,11 +316,6 @@ def run_compile(args: Namespace) -> None:
             shared_inputs=shared_inputs or None,
         )
 
-        source_links = extract_typst_links(
-            compile_sources.main_typ_path,
-            query_root=os.getcwd(),
-        )
-
         print("Compiling Typst project...", file=sys.stderr)
         shared_glyphs = bool(getattr(args, "shared_glyphs", True))
         base_url = resolve_base_url(args, required=False)
@@ -385,7 +379,6 @@ def run_compile(args: Namespace) -> None:
                 ("meta.html", "Meta"),
                 (f"./assets/post.{compile_sources.asset_hash}.pdf", "PDF"),
             ],
-            source_links=source_links,
         )
 
         index_path = os.path.join(output_dirs.html_output_dir, "index.html")

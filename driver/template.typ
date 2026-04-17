@@ -124,6 +124,21 @@
 #let with_raw_copy(body) = {
   let raw_copy_enabled = _driver_has_driver() and _driver_is_svg_export()
 
+  show link: it => {
+    [#metadata((t: "lnk", href: str(it.dest), b: it.body)) <driver-doc>]
+    it
+  }
+
+  show strong: it => {
+    [#metadata((t: "b", b: it.body)) <driver-doc>]
+    it
+  }
+
+  show emph: it => {
+    [#metadata((t: "i", b: it.body)) <driver-doc>]
+    it
+  }
+
   show heading: it => {
     [#metadata((t: "h", l: it.level, b: it.body)) <driver-doc>]
     it
@@ -165,12 +180,17 @@
   }
 
   show quote.where(block: true): it => {
-    [#metadata((t: "blockquote", b: it.body)) <driver-doc>]
+    [#metadata((t: "blockquote", b: it.body, attr: it.attribution)) <driver-doc>]
     it
   }
 
   show math.equation.where(block: true): it => {
     [#metadata((t: "eq", alt: it.alt, b: it.body)) <driver-doc>]
+    it
+  }
+
+  show math.equation.where(block: false): it => {
+    [#metadata((t: "eq-il", alt: it.alt, b: it.body)) <driver-doc>]
     it
   }
 
