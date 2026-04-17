@@ -16,7 +16,6 @@ from .revisions import list_revisions
 
 
 _typst_path: Optional[str] = None
-_typst_version: Optional[str] = None
 _svgo_path: Optional[str] = None
 _svgo_path_checked = False
 _svgo_missing_warned = False
@@ -40,7 +39,6 @@ _SVGO_GLYPH_CONFIG_PATH = os.path.join(
     os.path.dirname(os.path.dirname(__file__)),
     "svgo.glyphs.config.mjs",
 )
-_GLOBAL_GLYPH_MAP_VERSION = 1
 GLOBAL_GLYPH_ASSET_FILENAME = "glyphs.svg"
 GLOBAL_GLYPH_MAP_FILENAME = "glyph-map.json"
 _HTML_TAG_PATTERN = re.compile(r"<[^>]+>")
@@ -367,26 +365,6 @@ def _resolve_typst_path() -> str:
         print("Typst executable not found in PATH.")
         sys.exit(1)
     return _typst_path
-
-
-def _resolve_typst_version() -> str:
-    global _typst_version
-    if _typst_version is not None:
-        return _typst_version
-
-    typst_path = _resolve_typst_path()
-    result = subprocess.run(
-        [typst_path, "--version"],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    version = result.stdout.strip()
-    if not version:
-        raise RuntimeError("Failed to resolve Typst version.")
-
-    _typst_version = version
-    return _typst_version
 
 
 def _resolve_svgo_path() -> Optional[str]:
@@ -1368,10 +1346,7 @@ def _short_id_to_index(short_id: str) -> int:
 
 
 def _load_global_glyph_registry(map_path: str) -> Dict[str, Any]:
-    typst_ver = _resolve_typst_version()
     default_registry: Dict[str, Any] = {
-        "version": _GLOBAL_GLYPH_MAP_VERSION,
-        "typst_version": typst_ver,
         "next_short_index": 1,
         "symbols": {},
         "fingerprint_to_short": {},
@@ -1384,13 +1359,21 @@ def _load_global_glyph_registry(map_path: str) -> Dict[str, Any]:
     with open(map_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
+    typst_id_to_short: Dict[str, str] = {}
+    for raw_typst_id, short_id in data.get("typst_id_to_short", {}).items():
+        if "::" in raw_typst_id:
+            _, typst_id = raw_typst_id.split("::", 1)
+        else:
+            typst_id = raw_typst_id
+        if typst_id in typst_id_to_short:
+            continue
+        typst_id_to_short[typst_id] = short_id
+
     return {
-        "version": data["version"],
-        "typst_version": typst_ver,
-        "next_short_index": data["next_short_index"],
-        "symbols": data["symbols"],
-        "fingerprint_to_short": data["fingerprint_to_short"],
-        "typst_id_to_short": data["typst_id_to_short"],
+        "next_short_index": data.get("next_short_index", 1),
+        "symbols": data.get("symbols", {}),
+        "fingerprint_to_short": data.get("fingerprint_to_short", {}),
+        "typst_id_to_short": typst_id_to_short,
     }
 
 
@@ -1412,15 +1395,10 @@ def _resolve_global_short_id(
     typst_id_to_short: Dict[str, str] = registry["typst_id_to_short"]
     fingerprint_to_short: Dict[str, str] = registry["fingerprint_to_short"]
 
-    typst_version = str(registry["typst_version"])
-    scoped_typst_id = f"{typst_version}::{typst_id}"
-
     chosen_short_id: Optional[str] = None
 
     mapped_short_id: Optional[str]
-    if scoped_typst_id in typst_id_to_short:
-        mapped_short_id = typst_id_to_short[scoped_typst_id]
-    elif typst_id in typst_id_to_short:
+    if typst_id in typst_id_to_short:
         mapped_short_id = typst_id_to_short[typst_id]
     else:
         mapped_short_id = None
@@ -1456,7 +1434,7 @@ def _resolve_global_short_id(
             "body": body,
         }
 
-    typst_id_to_short[scoped_typst_id] = chosen_short_id
+    typst_id_to_short[typst_id] = chosen_short_id
     fingerprint_to_short[fingerprint] = chosen_short_id
 
     return chosen_short_id
@@ -1481,8 +1459,6 @@ def _render_glyph_svg(symbols: Dict[str, Dict[str, str]]) -> str:
 
 def _write_global_glyph_registry(map_path: str, registry: Dict[str, Any]) -> None:
     payload: Dict[str, Any] = {
-        "version": _GLOBAL_GLYPH_MAP_VERSION,
-        "typst_version": registry["typst_version"],
         "next_short_index": registry["next_short_index"],
         "symbols": registry["symbols"],
         "fingerprint_to_short": registry["fingerprint_to_short"],
