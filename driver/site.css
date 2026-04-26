@@ -327,3 +327,20 @@ html[data-layout="mobile"] .pages-desktop {
 @media (prefers-reduced-motion: reduce) {
     #copy-toast { transition: none; }
 }
+
+.svg-input-overlay {
+    position: absolute;
+    box-sizing: border-box;
+    border: 1.5px solid var(--svg-code-blue);
+    border-radius: 3px;
+    background: var(--page-bg);
+    color: var(--text-color);
+    font-family: system-ui, -apple-system, sans-serif;
+    padding: 0 6px;
+    outline: none;
+    z-index: 100;
+}
+
+.svg-input-overlay:focus {
+    box-shadow: 0 0 0 2px var(--svg-focus-ring);
+}

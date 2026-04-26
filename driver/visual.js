@@ -9,6 +9,8 @@
   const COPY_ACTION_PREFIX = 'copy:';
   const THEME_ACTION = 'theme';
   const LAYOUT_ACTION = 'layout';
+  const INPUT_ACTION_PREFIX = 'input:';
+  const FORM_ACTION_PREFIX = 'form-action:';
   const BOUND_SVG_DOCUMENTS = new WeakSet();
   const SVG_COLOR_TOKENS = [
     '--svg-paper-bg',
@@ -116,10 +118,22 @@
         return {type: 'copy', uid};
       }
     }
+    if (actionToken.startsWith(INPUT_ACTION_PREFIX)) {
+      const id = actionToken.slice(INPUT_ACTION_PREFIX.length).trim();
+      if (id) {
+        return {type: 'input', id};
+      }
+    }
+    if (actionToken.startsWith(FORM_ACTION_PREFIX)) {
+      const id = actionToken.slice(FORM_ACTION_PREFIX.length).trim();
+      if (id) {
+        return {type: 'form-action', id};
+      }
+    }
     return null;
   };
 
-  const executeSvgAction = (action) => {
+  const executeSvgAction = (action, context) => {
     if (action.type === THEME_ACTION) {
       window.toggleColorTheme?.();
       return;
@@ -130,6 +144,19 @@
     }
     if (action.type === 'copy') {
       void window.copyCode?.(action.uid);
+      return;
+    }
+    if (action.type === 'input' && context) {
+      window.spawnFormInput?.(action.id, context.anchorNode, context.pageObject);
+      return;
+    }
+    if (action.type === 'form-action') {
+      if (context) {
+        const g = context.anchorNode.parentElement;
+        g.style.opacity = '0.5';
+        setTimeout(() => { g.style.opacity = ''; }, 150);
+      }
+      window.execFormAction?.(action.id);
     }
   };
 
@@ -156,7 +183,7 @@
       }
 
       event.preventDefault();
-      executeSvgAction(action);
+      executeSvgAction(action, {anchorNode, pageObject});
     });
 
     svgDocument.addEventListener('keydown', (event) => {
@@ -176,7 +203,7 @@
         return;
       }
       event.preventDefault();
-      executeSvgAction(action);
+      executeSvgAction(action, {anchorNode, pageObject});
     });
   };
 

@@ -133,6 +133,7 @@ a:focus-visible > path {
     --svg-focus-ring: #8ca8ff;
   }
 }
+a[href^="#cond="] { pointer-events: none; }
 </style>
 """.strip()
 
@@ -142,6 +143,7 @@ class DriverWebAssets:
     stylesheet_path: str
     clipboard_script_path: str
     visual_script_path: str
+    form_script_path: str
     inline_style: str
     inline_script: str
 
@@ -182,6 +184,7 @@ class HtmlBuildConfig:
     shared_glyphs: bool = True
     image_source_dir: Optional[str] = None
     site_base_url: Optional[str] = None
+    form_hooks: str = ""
     primary_pages_wrapper_class: str = ""
     extra_pages_html: str = ""
 
@@ -780,7 +783,7 @@ def _remove_legacy_root_js_files(webroot_dir: str) -> int:
 
     removed_count = 0
     for filename in os.listdir(webroot_dir):
-        if not re.fullmatch(r"(?:clipboard|visual)(?:\.[^.]+)?(?:\.min)?\.js", filename):
+        if not re.fullmatch(r"(?:clipboard|visual|form)(?:\.[^.]+)?(?:\.min)?\.js", filename):
             continue
         target_path = os.path.join(webroot_dir, filename)
         if os.path.isfile(target_path):
@@ -803,6 +806,7 @@ def build_web_assets(driver_dir: str, webroot_dir: str) -> DriverWebAssets:
     stylesheet_src_path = os.path.join(driver_dir, "site.css")
     clipboard_src_path = os.path.join(driver_dir, "clipboard.js")
     visual_src_path = os.path.join(driver_dir, "visual.js")
+    form_src_path = os.path.join(driver_dir, "form.js")
 
     with open(stylesheet_src_path, "r", encoding="utf-8") as f:
         stylesheet_source = f.read().strip() + "\n"
@@ -810,6 +814,8 @@ def build_web_assets(driver_dir: str, webroot_dir: str) -> DriverWebAssets:
         clipboard_source = f.read()
     with open(visual_src_path, "r", encoding="utf-8") as f:
         visual_source = f.read()
+    with open(form_src_path, "r", encoding="utf-8") as f:
+        form_source = f.read()
 
     stylesheet_asset_path = _write_hashed_asset(
         asset_dir=assets_dir,
@@ -829,6 +835,12 @@ def build_web_assets(driver_dir: str, webroot_dir: str) -> DriverWebAssets:
         suffix=".min.js",
         content=_minify_js_source(visual_source),
     )
+    form_asset_path = _write_hashed_asset(
+        asset_dir=assets_dir,
+        prefix="form",
+        suffix=".min.js",
+        content=_minify_js_source(form_source),
+    )
 
     inline_style_src_path = os.path.join(driver_dir, "inline-style.css")
     inline_script_src_path = os.path.join(driver_dir, "inline-script.js")
@@ -842,6 +854,7 @@ def build_web_assets(driver_dir: str, webroot_dir: str) -> DriverWebAssets:
         stylesheet_path=stylesheet_asset_path,
         clipboard_script_path=clipboard_asset_path,
         visual_script_path=visual_asset_path,
+        form_script_path=form_asset_path,
         inline_style=_minify_css_source(inline_style_source),
         inline_script=_minify_js_source(inline_script_source),
     )
@@ -1962,6 +1975,10 @@ def _infer_svg_anchor_role(
         return role
     if action_token == "theme" or action_token.startswith("copy:"):
         return "button"
+    if action_token.startswith("input:"):
+        return "textbox"
+    if action_token.startswith("form-action:"):
+        return "button"
     return None
 
 
@@ -2189,6 +2206,9 @@ def _infer_svg_anchor_label(
     if not stripped_href:
         return None
 
+    if stripped_href.startswith("#cond="):
+        return None
+
     action_token, _ = _parse_svg_action_href(href)
     if action_token is not None:
         meta = (action_metadata or {}).get(action_token, {})
@@ -2199,6 +2219,10 @@ def _infer_svg_anchor_label(
             return "Theme"
         if action_token.startswith("copy:"):
             return "Copy"
+        if action_token.startswith("input:"):
+            return "Input"
+        if action_token.startswith("form-action:"):
+            return "Action"
         return "Action"
 
     normalized_internal_href = _normalize_site_href_for_label(
@@ -2467,6 +2491,48 @@ def _replace_driver_image_anchors(
     )
 
 
+_COND_HREF_RE = re.compile(r'href="#cond=([^":]+):([01])"')
+
+
+_SVG_GA_TAG_RE = re.compile(r"<(/?)([ga])\b([^>]*)>")
+
+
+def _mark_svg_cond_groups(svg_content: str) -> str:
+    g_stack: List[Tuple[int, int]] = []
+    edits: Dict[int, Tuple[int, str, str]] = {}
+
+    for m in _SVG_GA_TAG_RE.finditer(svg_content):
+        is_close = bool(m.group(1))
+        tag_name = m.group(2)
+        if tag_name == "g":
+            if is_close:
+                if g_stack:
+                    g_stack.pop()
+            else:
+                g_stack.append((m.start(), m.end()))
+        elif tag_name == "a" and not is_close:
+            cond_m = _COND_HREF_RE.search(m.group(3))
+            if cond_m and g_stack:
+                g_start, g_end = g_stack[-1]
+                if g_start not in edits:
+                    edits[g_start] = (g_end, cond_m.group(1), cond_m.group(2))
+
+    if not edits:
+        return svg_content
+
+    parts: List[str] = []
+    prev = 0
+    for g_start in sorted(edits):
+        g_end, cond_id, branch = edits[g_start]
+        parts.append(svg_content[prev:g_end - 1])
+        parts.append(
+            f' data-cond-id="{cond_id}" data-cond-branch="{branch}">'
+        )
+        prev = g_end
+    parts.append(svg_content[prev:])
+    return "".join(parts)
+
+
 def patch_svg_file(
     src_path: str,
     dst_path: str,
@@ -2516,7 +2582,7 @@ def patch_svg_file(
             attrs,
         )
         action_hash_match = re.search(
-            r"\s+(?:xlink:)?href\s*=\s*['\"]#action=[^'\"]*['\"]",
+            r"\s+(?:xlink:)?href\s*=\s*['\"]#(?:action|cond)=[^'\"]*['\"]",
             attrs,
         )
         if javascript_parent_match or action_hash_match:
@@ -2540,6 +2606,7 @@ def patch_svg_file(
     )
     svg_data = _inject_svg_theme_classes(svg_data)
     svg_data = _inject_svg_theme_style(svg_data)
+    svg_data = _mark_svg_cond_groups(svg_data)
 
     if (
         image_source_dir is not None
@@ -2787,6 +2854,33 @@ def build_html_from_svgs(
         "{{CLIPBOARD_SRC}}", html.escape(clipboard_src)
     )
     index_content = index_content.replace("{{VISUAL_SRC}}", html.escape(visual_src))
+
+    has_form_inputs = action_metadata and any(
+        k.startswith("input:") or k.startswith("form-action:")
+        for k in action_metadata
+    )
+    if has_form_inputs:
+        form_src = build_root_asset_href(
+            config.asset_context.web_assets.form_script_path
+        )
+        form_tag = f'<script defer src="{html.escape(form_src)}"></script>'
+    else:
+        form_tag = ""
+    index_content = index_content.replace("{{FORM_SCRIPT}}", form_tag)
+
+    form_hooks_tag = ""
+    if has_form_inputs and config.form_hooks:
+        stub = (
+            "window.form=window.form||{_conds:{},_actions:{},_on:{}};"
+            "form.cond=(i,f)=>{form._conds[i]=f};"
+            "form.action=(i,f)=>{form._actions[i]=f};"
+            "form.on=(i,f)=>{(form._on[i]=form._on[i]||[]).push(f)};\n"
+        )
+        minified_hooks = _minify_js_source(stub + config.form_hooks)
+        if minified_hooks:
+            form_hooks_tag = f"<script>{minified_hooks}</script>"
+    index_content = index_content.replace("{{FORM_HOOKS}}", form_hooks_tag)
+
     rss_feed_link = ""
     if config.rss_feed_path:
         rss_feed_href = build_relative_href(

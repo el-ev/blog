@@ -38,6 +38,15 @@ from .utils import (
 )
 
 _SITE_TITLE = "Blog"
+_FORM_HOOKS_FILENAME = "form-hooks.js"
+
+
+def _read_form_hooks(workspace_path: str) -> str:
+    hooks_path = os.path.join(workspace_path, _FORM_HOOKS_FILENAME)
+    if not os.path.isfile(hooks_path):
+        return ""
+    with open(hooks_path, "r", encoding="utf-8") as f:
+        return f.read()
 
 
 @dataclass(frozen=True)
@@ -110,6 +119,7 @@ def _prepare_compile_sources(
 ) -> PreparedCompileSources:
     driver_typ_path = os.path.join(base_dir, "driver.typ")
     template_typ_path = os.path.join(base_dir, "template.typ")
+    form_typ_path = os.path.join(base_dir, "form.typ")
 
     with open(driver_typ_path, "r", encoding="utf-8") as f:
         driver_source = f.read()
@@ -118,7 +128,10 @@ def _prepare_compile_sources(
     main_typ_path = os.path.relpath(main_typ_abs_path, start=os.getcwd()).replace(
         "\\", "/"
     )
-    asset_hash = sources_hash([workspace_path, driver_typ_path, template_typ_path])
+    hash_paths = [workspace_path, driver_typ_path, template_typ_path]
+    if os.path.isfile(os.path.join(workspace_path, _FORM_HOOKS_FILENAME)):
+        hash_paths.append(form_typ_path)
+    asset_hash = sources_hash(hash_paths)
     driver_source = driver_source.replace(
         "// IMPORT_MAIN", f'#import "{main_typ_path}": *'
     )
@@ -355,6 +368,7 @@ def run_compile(args: Namespace) -> None:
                     shared_glyphs=shared_glyphs,
                     image_source_dir=workspace_path,
                     site_base_url=base_url,
+                    form_hooks=_read_form_hooks(workspace_path),
                 ),
             )
         )

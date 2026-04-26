@@ -4,6 +4,12 @@ import os
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+_EMPTY_COND_SPAN_RE = re.compile(
+    r'(<span data-cond-id="[^"]+"'
+    r' data-cond-branch="[^"]+">)'
+    r"\s*(</span>)"
+)
+
 from .utils import (
     _extract_typst_table_rows,
     _flatten_query_text,
@@ -300,6 +306,17 @@ def flatten_doc_node_to_html(
         if func == "link":
             dest = node.get("dest", "")
             body_html = flatten_doc_node_to_html(node.get("body", ""), emphasis_map)
+            if isinstance(dest, str) and dest.startswith("#cond="):
+                m = re.match(r"#cond=(.+):([01])$", dest)
+                if m:
+                    cond_id = html.escape(m.group(1), quote=True)
+                    branch = m.group(2)
+                    hide = ' style="display:none"' if branch == "1" else ""
+                    return (
+                        f'<span data-cond-id="{cond_id}"'
+                        f' data-cond-branch="{branch}"{hide}>'
+                        f"{body_html}</span>"
+                    )
             dest_escaped = html.escape(str(dest), quote=True)
             return f'<a href="{dest_escaped}" tabindex="-1">{body_html}</a>'
         if func == "raw":
@@ -352,18 +369,28 @@ def build_hidden_text(
     # State: table-figure caption pending until table body arrives
     pending_table_cap: Optional[Dict[str, Any]] = None
 
+    # State: residual text from ghost-filtered paragraphs (e.g. trailing period)
+    trailing_residual: Optional[str] = None
+
     # Per-kind figure counters (for caption labels like "Figure 1:")
     fig_counts: Dict[str, int] = {}
 
     # Build per-element link map: lnk nodes follow their parent element,
     # so collect them and associate with the preceding text-bearing element.
     elem_links: Dict[int, List[Tuple[str, str]]] = {}
+    ghost_texts: set = set()
     last_text_idx: Optional[int] = None
     for i, elem in enumerate(doc_elements):
         t = elem.get("t")
         if t == "lnk":
             href = elem.get("href", "")
-            if not href or href.startswith("#action="):
+            if href.startswith("#cond=") or href.startswith("#action="):
+                text = re.sub(
+                    r"\s+", " ", _flatten_query_text(elem.get("b", ""))
+                ).strip()
+                if text:
+                    ghost_texts.add(text)
+            if not href or href.startswith("#action=") or href.startswith("#cond="):
                 continue
             label = re.sub(
                 r"\s+", " ", _flatten_query_text(elem.get("b", ""))
@@ -411,8 +438,39 @@ def build_hidden_text(
     for elem_idx, elem in enumerate(doc_elements):
         t = elem.get("t")
 
-        # Link metadata nodes are consumed above; skip in main loop
         if t == "lnk":
+            href = elem.get("href", "")
+            frag = None
+            if href.startswith("#action=input:"):
+                input_id = href[len("#action=input:"):]
+                placeholder = re.sub(
+                    r"\s+", " ", _flatten_query_text(elem.get("b", ""))
+                ).strip()
+                esc_id = html.escape(input_id, quote=True)
+                esc_ph = html.escape(placeholder, quote=True)
+                frag = (
+                    f' <input class="sr-only-input"'
+                    f' data-input-id="{esc_id}"'
+                    f' aria-label="{esc_ph}">'
+                )
+            elif href.startswith("#action=form-action:"):
+                action_id = href[len("#action=form-action:"):]
+                label = re.sub(
+                    r"\s+", " ", _flatten_query_text(elem.get("b", ""))
+                ).strip()
+                esc_id = html.escape(action_id, quote=True)
+                frag = (
+                    f' <button class="sr-only-action"'
+                    f' data-action-id="{esc_id}">'
+                    f"{html.escape(label)}</button>"
+                )
+            if frag is not None:
+                suffix = trailing_residual or ""
+                trailing_residual = None
+                if parts and parts[-1].endswith("</p>"):
+                    parts[-1] = parts[-1][:-4] + frag + suffix + "</p>"
+                else:
+                    parts.append(frag.strip() + suffix)
             continue
 
         # Skip initial page_header PARs (subtitle + date)
@@ -442,9 +500,31 @@ def build_hidden_text(
         elif t == "par":
             body_html = flatten_doc_node_to_html(elem.get("b", ""), emphasis_map).strip()
             if body_html:
+                if ghost_texts and "data-cond-id=" not in body_html:
+                    raw_text = re.sub(
+                        r"\s+", " ", _flatten_query_text(elem.get("b", ""))
+                    ).strip()
+                    residual = raw_text
+                    for gt in ghost_texts:
+                        residual = residual.replace(gt, "")
+                    residual = residual.strip()
+                    if not residual:
+                        continue
+                    if residual != raw_text:
+                        trailing_residual = html.escape(residual)
+                        continue
                 links = elem_links.get(elem_idx)
                 if links:
                     body_html = _embed_links_in_text(body_html, links)
+                if "data-cond-id=" in body_html and parts:
+                    m = _EMPTY_COND_SPAN_RE.search(parts[-1])
+                    if m:
+                        parts[-1] = (
+                            parts[-1][: m.end(1)]
+                            + body_html
+                            + parts[-1][m.start(2) :]
+                        )
+                        continue
                 parts.append(f"<p>{body_html}</p>")
 
         elif t == "raw":  # block raw (bl=True checked above)
