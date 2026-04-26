@@ -1,4 +1,5 @@
-#import "../../driver/template.typ": *;
+#import "../../driver/template.typ": *
+#import "../../driver/form.typ": *
 
 #let title = "Test Form"
 #let subtitle = none

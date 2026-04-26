@@ -19,7 +19,7 @@
       <link>https://blog.owo.li/posts/2026-04-17/test-screen-reader-text/index.html</link>
       <guid isPermaLink="true">https://blog.owo.li/posts/2026-04-17/test-screen-reader-text/index.html</guid>
       <pubDate>Fri, 17 Apr 2026 00:00:00 +0000</pubDate>
-      <description>Posts on this blog are compiled to SVG pages, which provides a consistent visual appearance but leaves assistive technology with nothing to announce.</description>
+      <description>A link to the homepage should be announced as link text, not as a raw URL.</description>
     </item>
     <item>
       <title>Preload SVG Sprites</title>
@@ -40,14 +40,14 @@
       <link>https://blog.owo.li/posts/2026-04-08/kioubit-crypto-ch2p1-writeup/index.html</link>
       <guid isPermaLink="true">https://blog.owo.li/posts/2026-04-08/kioubit-crypto-ch2p1-writeup/index.html</guid>
       <pubDate>Wed, 08 Apr 2026 00:00:00 +0000</pubDate>
-      <description>Challenge: http://kioubit.dn42/challenge/ch2/</description>
+      <description>Note: This challenge is hosted on the dn42 network.</description>
     </item>
     <item>
       <title>Test Code Block Copy</title>
       <link>https://blog.owo.li/posts/2026-04-07/test-code-block-copy/index.html</link>
       <guid isPermaLink="true">https://blog.owo.li/posts/2026-04-07/test-code-block-copy/index.html</guid>
       <pubDate>Tue, 07 Apr 2026 00:00:00 +0000</pubDate>
-      <description>Since this is a programmer's blog, posts will inevitably contain code.</description>
+      <description>To try it out, click any inline code snippet above or the code block below to copy the exact source text to your clipboard:</description>
     </item>
     <item>
       <title>Inline Link Test</title>
