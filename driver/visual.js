@@ -147,7 +147,7 @@
       return;
     }
     if (action.type === 'input' && context) {
-      window.spawnFormInput?.(action.id, context.anchorNode, context.pageObject);
+      window.spawnFormInput?.(action.id, context.anchorNode, context.pageObject, context.initialKey);
       return;
     }
     if (action.type === 'form-action') {
@@ -187,7 +187,10 @@
     });
 
     svgDocument.addEventListener('keydown', (event) => {
-      if (event.key !== ' ' && event.key !== 'Spacebar' && event.key !== 'Enter') {
+      const isActivation = event.key === ' ' || event.key === 'Spacebar' || event.key === 'Enter';
+      const isPrintable = event.key.length === 1 && !event.ctrlKey && !event.altKey && !event.metaKey;
+      const isInputNav = event.key === 'ArrowLeft' || event.key === 'ArrowRight';
+      if (!isActivation && !isPrintable && !isInputNav) {
         return;
       }
       const eventTarget = event.target;
@@ -202,8 +205,11 @@
       if (!action) {
         return;
       }
+      if ((isPrintable || isInputNav) && action.type !== 'input') {
+        return;
+      }
       event.preventDefault();
-      executeSvgAction(action, {anchorNode, pageObject});
+      executeSvgAction(action, {anchorNode, pageObject, initialKey: isPrintable ? event.key : undefined});
     });
   };
 

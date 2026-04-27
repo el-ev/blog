@@ -138,10 +138,14 @@
     attributeFilter: ['data-layout'],
   });
 
-  const spawnInputOverlay = (id, anchorNode, pageObject) => {
+  const spawnInputOverlay = (id, anchorNode, pageObject, initialKey) => {
     const existing = ACTIVE_INPUTS.get(id);
     if (existing) {
       existing.element.focus();
+      if (initialKey) {
+        existing.element.value += initialKey;
+        fireInput(id, existing.element.value);
+      }
       return;
     }
 
@@ -173,6 +177,20 @@
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
         input.blur();
+        anchorNode.focus();
+        return;
+      }
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        input.blur();
+        const svgDoc = pageObject.contentDocument;
+        if (svgDoc) {
+          const focusable = [...svgDoc.querySelectorAll('a[aria-label]')];
+          const idx = focusable.indexOf(anchorNode);
+          const next = focusable[e.shiftKey ? idx - 1 : idx + 1];
+          if (next) next.focus();
+          else anchorNode.focus();
+        }
       }
     });
 
@@ -194,6 +212,11 @@
     };
     requestAnimationFrame(trackPosition);
     input.focus();
+
+    if (initialKey) {
+      input.value += initialKey;
+      fireInput(id, input.value);
+    }
   };
 
   window.spawnFormInput = spawnInputOverlay;
