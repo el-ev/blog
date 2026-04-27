@@ -155,8 +155,9 @@
   }
 
   show figure.where(kind: table): it => {
-    [#metadata((t: "fig-cap", cap: it.caption)) <driver-doc>]
+    [#metadata((t: "fig-t/o", cap: it.caption)) <driver-doc>]
     it
+    [#metadata((t: "fig-t/c")) <driver-doc>]
   }
 
   show table: it => {
@@ -180,8 +181,9 @@
   }
 
   show quote.where(block: true): it => {
-    [#metadata((t: "blockquote", b: it.body, attr: it.attribution)) <driver-doc>]
+    [#metadata((t: "blockquote/o", attr: it.attribution, b: it.body)) <driver-doc>]
     it
+    [#metadata((t: "blockquote/c")) <driver-doc>]
   }
 
   show math.equation.where(block: true): it => {

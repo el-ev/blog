@@ -344,6 +344,64 @@ def flatten_doc_node_to_html(
     return ""
 
 
+def _is_inline_metadata(node: Dict[str, Any]) -> bool:
+    t = node.get("t", "")
+    if t in ("b", "i", "lnk", "eq-il"):
+        return True
+    if t == "raw" and not node.get("bl"):
+        return True
+    return False
+
+
+def _group_list_items(nodes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    result: List[Dict[str, Any]] = []
+    i = 0
+    while i < len(nodes):
+        t = nodes[i].get("t")
+        if t in ("li", "eli"):
+            tag = "ul" if t == "li" else "ol"
+            items: List[Dict[str, Any]] = []
+            while i < len(nodes):
+                cur_t = nodes[i].get("t")
+                if cur_t == t:
+                    item = nodes[i]
+                    if "children" in item:
+                        item["children"] = _group_list_items(item["children"])
+                    items.append(item)
+                    i += 1
+                elif _is_inline_metadata(nodes[i]):
+                    i += 1
+                else:
+                    break
+            result.append({"t": tag, "children": items})
+        else:
+            if "children" in nodes[i]:
+                nodes[i]["children"] = _group_list_items(nodes[i]["children"])
+            result.append(nodes[i])
+            i += 1
+    return result
+
+
+def _build_node_tree(flat_elements: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    root: List[Dict[str, Any]] = []
+    stack: List[List[Dict[str, Any]]] = [root]
+    for i, elem in enumerate(flat_elements):
+        t = elem.get("t", "")
+        elem["_idx"] = i
+        if t.endswith("/o"):
+            node = {k: v for k, v in elem.items() if k != "t"}
+            node["t"] = t[:-2]
+            node["children"] = []
+            stack[-1].append(node)
+            stack.append(node["children"])
+        elif t.endswith("/c"):
+            if len(stack) > 1:
+                stack.pop()
+        else:
+            stack[-1].append(elem)
+    return _group_list_items(root)
+
+
 def build_hidden_text(
     doc_elements: List[Dict[str, Any]],
     post_title: str,
@@ -351,37 +409,21 @@ def build_hidden_text(
     asset_hash: str,
     nav_links: Optional[List[Tuple[str, str]]] = None,
 ) -> str:
-    """Build sr-only HTML from an ordered list of <driver-doc> metadata elements."""
-    parts: List[str] = []
-    parts.append(f"<h1>{html.escape(post_title)}</h1>")
+    """Build sr-only HTML from <driver-doc> metadata elements."""
+    header: List[str] = [f"<h1>{html.escape(post_title)}</h1>"]
     if post_subtitle:
-        parts.append(f'<p class="subtitle">{html.escape(post_subtitle)}</p>')
+        header.append(f'<p class="subtitle">{html.escape(post_subtitle)}</p>')
 
-    # page_header emits subtitle PAR (if present) and date PAR.
-    # The title is inside block() so it does NOT produce a par metadata node.
     skip_count = 1 + (1 if post_subtitle else 0)
-    skipped_pars = 0
-
-    # State: grouping consecutive list items
-    list_tag: Optional[str] = None  # "ul" or "ol"
-    list_items: List[str] = []
-
-    # State: table-figure caption pending until table body arrives
-    pending_table_cap: Optional[Dict[str, Any]] = None
-
-    # State: residual text from ghost-filtered paragraphs (e.g. trailing period)
-    trailing_residual: Optional[str] = None
-
-    # Per-kind figure counters (for caption labels like "Figure 1:")
     fig_counts: Dict[str, int] = {}
 
-    # Build per-element link map: lnk nodes follow their parent element,
-    # so collect them and associate with the preceding text-bearing element.
+    # --- pre-passes on the flat stream (before tree building) ---
+
     elem_links: Dict[int, List[Tuple[str, str]]] = {}
     ghost_texts: set = set()
     last_text_idx: Optional[int] = None
     for i, elem in enumerate(doc_elements):
-        t = elem.get("t")
+        t = elem.get("t", "")
         if t == "lnk":
             href = elem.get("href", "")
             if href.startswith("#cond=") or href.startswith("#action="):
@@ -399,21 +441,18 @@ def build_hidden_text(
                 continue
             if last_text_idx is not None:
                 elem_links.setdefault(last_text_idx, []).append((href, label))
-        elif t in ("par", "li", "eli", "h", "blockquote", "info", "dt"):
+        elif t in ("par", "h", "info", "dt", "li", "eli"):
             last_text_idx = i
         elif t not in ("b", "i", "raw", "eq-il"):
             last_text_idx = None
 
-    def flush_list() -> None:
-        if not list_items:
-            return
-        tag = list_tag or "ul"
-        parts.append(f"<{tag}>")
-        parts.extend(list_items)
-        parts.append(f"</{tag}>")
-        list_items.clear()
+    emphasis_map = _collect_emphasis_text(
+        [e for e in doc_elements if e.get("t") in ("b", "i")]
+    )
 
-    def build_fig_label(cap: Dict[str, Any], default_kind: str) -> str:
+    tree = _build_node_tree(doc_elements)
+
+    def fig_label(cap: Dict[str, Any], default_kind: str) -> str:
         kind = cap.get("kind", default_kind)
         fig_counts[kind] = fig_counts.get(kind, 0) + 1
         n = fig_counts[kind]
@@ -428,81 +467,180 @@ def build_hidden_text(
         sep_text = (
             re.sub(r"\s+", " ", _flatten_query_text(sep)).strip() if sep else ":"
         )
-        num_str = _format_numbering(n, fmt)
-        return f"{sup_text}\u00a0{num_str}{sep_text}"
+        return f"{sup_text}\u00a0{_format_numbering(n, fmt)}{sep_text}"
 
-    emphasis_map = _collect_emphasis_text(
-        [e for e in doc_elements if e.get("t") in ("b", "i")]
-    )
+    def _links_for(node: Dict[str, Any]) -> Optional[List[Tuple[str, str]]]:
+        idx = node.get("_idx")
+        return elem_links.get(idx) if idx is not None else None
 
-    for elem_idx, elem in enumerate(doc_elements):
-        t = elem.get("t")
+    def render(nodes: List[Dict[str, Any]], skip_pars: int = 0) -> List[str]:
+        parts: List[str] = []
+        skipped_pars = 0
+        trailing_residual: Optional[str] = None
 
-        if t == "lnk":
-            href = elem.get("href", "")
-            frag = None
-            if href.startswith("#action=input:"):
-                input_id = href[len("#action=input:"):]
-                placeholder = re.sub(
-                    r"\s+", " ", _flatten_query_text(elem.get("b", ""))
-                ).strip()
-                esc_id = html.escape(input_id, quote=True)
-                esc_ph = html.escape(placeholder, quote=True)
-                frag = (
-                    f' <input class="sr-only-input"'
-                    f' data-input-id="{esc_id}"'
-                    f' aria-label="{esc_ph}">'
+        for node in nodes:
+            t = node.get("t")
+
+            if t == "lnk":
+                href = node.get("href", "")
+                frag = None
+                if href.startswith("#action=input:"):
+                    input_id = href[len("#action=input:"):]
+                    placeholder = re.sub(
+                        r"\s+", " ", _flatten_query_text(node.get("b", ""))
+                    ).strip()
+                    esc_id = html.escape(input_id, quote=True)
+                    esc_ph = html.escape(placeholder, quote=True)
+                    frag = (
+                        f' <input class="sr-only-input"'
+                        f' data-input-id="{esc_id}"'
+                        f' aria-label="{esc_ph}">'
+                    )
+                elif href.startswith("#action=form-action:"):
+                    action_id = href[len("#action=form-action:"):]
+                    label = re.sub(
+                        r"\s+", " ", _flatten_query_text(node.get("b", ""))
+                    ).strip()
+                    esc_id = html.escape(action_id, quote=True)
+                    frag = (
+                        f' <button class="sr-only-action"'
+                        f' data-action-id="{esc_id}">'
+                        f"{html.escape(label)}</button>"
+                    )
+                if frag is not None:
+                    suffix = trailing_residual or ""
+                    trailing_residual = None
+                    if parts and parts[-1].endswith("</p>"):
+                        parts[-1] = parts[-1][:-4] + frag + suffix + "</p>"
+                    else:
+                        parts.append(frag.strip() + suffix)
+                continue
+
+            if t == "par" and skip_pars > 0 and skipped_pars < skip_pars:
+                skipped_pars += 1
+                continue
+
+            if t == "raw" and not node.get("bl"):
+                raw_text = node.get("x", "")
+                if raw_text:
+                    copy_id = make_raw_copy_id(raw_text)
+                    parts.append(
+                        f'<code id="raw-{copy_id}">'
+                        f"{html.escape(raw_text)}</code>"
+                    )
+                continue
+            if t in ("b", "i"):
+                continue
+
+            if t in ("ul", "ol"):
+                item_tag = "li" if t == "ul" else "eli"
+                items: List[str] = []
+                for child in node.get("children", []):
+                    if child.get("t") != item_tag:
+                        continue
+                    children = child.get("children", [])
+                    if children:
+                        inner = render(children)
+                        if (
+                            len(inner) == 1
+                            and inner[0].startswith("<p>")
+                            and inner[0].endswith("</p>")
+                        ):
+                            items.append(f"<li>{inner[0][3:-4]}</li>")
+                        else:
+                            items.append(f"<li>{''.join(inner)}</li>")
+                    else:
+                        body_html = flatten_doc_node_to_html(
+                            child.get("b", ""), emphasis_map
+                        ).strip()
+                        links = _links_for(child)
+                        if links:
+                            body_html = _embed_links_in_text(
+                                body_html, links
+                            )
+                        items.append(f"<li>{body_html}</li>")
+                if items:
+                    parts.append(f"<{t}>{''.join(items)}</{t}>")
+
+            elif t == "blockquote":
+                inner = render(node.get("children", []))
+                if not inner:
+                    body_html = flatten_doc_node_to_html(
+                        node.get("b", ""), emphasis_map
+                    ).strip()
+                    if body_html:
+                        inner = [f"<p>{body_html}</p>"]
+                attr = node.get("attr")
+                attr_html = ""
+                if attr is not None:
+                    attr_text = flatten_doc_node_to_html(attr).strip()
+                    if attr_text:
+                        attr_html = f"<footer>{attr_text}</footer>"
+                parts.append(
+                    f"<blockquote>{''.join(inner)}{attr_html}</blockquote>"
                 )
-            elif href.startswith("#action=form-action:"):
-                action_id = href[len("#action=form-action:"):]
-                label = re.sub(
-                    r"\s+", " ", _flatten_query_text(elem.get("b", ""))
-                ).strip()
-                esc_id = html.escape(action_id, quote=True)
-                frag = (
-                    f' <button class="sr-only-action"'
-                    f' data-action-id="{esc_id}">'
-                    f"{html.escape(label)}</button>"
+
+            elif t == "fig-t":
+                cap = node.get("cap")
+                table_child = next(
+                    (c for c in node.get("children", []) if c.get("t") == "table"),
+                    None,
                 )
-            if frag is not None:
-                suffix = trailing_residual or ""
-                trailing_residual = None
-                if parts and parts[-1].endswith("</p>"):
-                    parts[-1] = parts[-1][:-4] + frag + suffix + "</p>"
-                else:
-                    parts.append(frag.strip() + suffix)
-            continue
+                if table_child is not None:
+                    table_node = table_child.get("b")
+                    if isinstance(table_node, dict):
+                        try:
+                            rows = _extract_typst_table_rows(table_node)
+                            table_html = _render_table_html(rows)
+                            if table_html:
+                                if cap is not None and isinstance(cap, dict):
+                                    label = fig_label(cap, "table")
+                                    body_text = flatten_doc_node_to_html(
+                                        cap.get("body", "")
+                                    )
+                                    caption = re.sub(
+                                        r"\s+", " ", f"{label} {body_text}"
+                                    ).strip()
+                                    parts.append(
+                                        f"<figure>{table_html}"
+                                        f"<figcaption>{caption}</figcaption>"
+                                        f"</figure>"
+                                    )
+                                else:
+                                    parts.append(table_html)
+                        except Exception:
+                            pass
 
-        # Skip initial page_header PARs (subtitle + date)
-        if t == "par" and skipped_pars < skip_count:
-            skipped_pars += 1
-            continue
+            elif t == "table":
+                table_node = node.get("b")
+                if isinstance(table_node, dict):
+                    try:
+                        rows = _extract_typst_table_rows(table_node)
+                        table_html = _render_table_html(rows)
+                        if table_html:
+                            parts.append(table_html)
+                    except Exception:
+                        pass
 
-        # Inline raws and emphasis markers are handled by their parent
-        if t == "raw" and not elem.get("bl"):
-            continue
-        if t in ("b", "i"):
-            continue
+            elif t == "h":
+                level = min(node.get("l", 1) + 1, 6)
+                body_html = flatten_doc_node_to_html(
+                    node.get("b", ""), emphasis_map
+                )
+                links = _links_for(node)
+                if links:
+                    body_html = _embed_links_in_text(body_html, links)
+                parts.append(f"<h{level}>{body_html}</h{level}>")
 
-        # Any non-list element flushes the pending list buffer
-        if t not in ("li", "eli"):
-            flush_list()
-            list_tag = None
-
-        if t == "h":
-            level = min(elem.get("l", 1) + 1, 6)
-            body_html = flatten_doc_node_to_html(elem.get("b", ""), emphasis_map)
-            links = elem_links.get(elem_idx)
-            if links:
-                body_html = _embed_links_in_text(body_html, links)
-            parts.append(f"<h{level}>{body_html}</h{level}>")
-
-        elif t == "par":
-            body_html = flatten_doc_node_to_html(elem.get("b", ""), emphasis_map).strip()
-            if body_html:
+            elif t == "par":
+                body_html = flatten_doc_node_to_html(
+                    node.get("b", ""), emphasis_map
+                ).strip()
+                if not body_html:
+                    continue
                 if ghost_texts and "data-cond-id=" not in body_html:
                     raw_text = re.sub(
-                        r"\s+", " ", _flatten_query_text(elem.get("b", ""))
+                        r"\s+", " ", _flatten_query_text(node.get("b", ""))
                     ).strip()
                     residual = raw_text
                     for gt in ghost_texts:
@@ -513,7 +651,7 @@ def build_hidden_text(
                     if residual != raw_text:
                         trailing_residual = html.escape(residual)
                         continue
-                links = elem_links.get(elem_idx)
+                links = _links_for(node)
                 if links:
                     body_html = _embed_links_in_text(body_html, links)
                 if "data-cond-id=" in body_html and parts:
@@ -527,148 +665,109 @@ def build_hidden_text(
                         continue
                 parts.append(f"<p>{body_html}</p>")
 
-        elif t == "raw":  # block raw (bl=True checked above)
-            if parts:
-                parts.append("<p></p>")
-            raw_text = elem.get("x", "")
-            copy_id = make_raw_copy_id(raw_text)
-            parts.append(
-                f'<pre id="raw-{copy_id}"><code>{html.escape(raw_text)}</code></pre>'
-            )
-
-        elif t == "info":
-            body_html = flatten_doc_node_to_html(elem.get("b", ""), emphasis_map)
-            body_html = re.sub(r"\s+", " ", body_html).strip()
-            links = elem_links.get(elem_idx)
-            if links:
-                body_html = _embed_links_in_text(body_html, links)
-            parts.append(
-                f"<aside><p>{body_html}</p></aside>"
-            )
-
-        elif t == "li":
-            if list_tag != "ul":
-                flush_list()
-                list_tag = "ul"
-            body_html = flatten_doc_node_to_html(elem.get("b", ""), emphasis_map).strip()
-            links = elem_links.get(elem_idx)
-            if links:
-                body_html = _embed_links_in_text(body_html, links)
-            list_items.append(f"<li>{body_html}</li>")
-
-        elif t == "eli":
-            if list_tag != "ol":
-                flush_list()
-                list_tag = "ol"
-            body_html = flatten_doc_node_to_html(elem.get("b", ""), emphasis_map).strip()
-            links = elem_links.get(elem_idx)
-            if links:
-                body_html = _embed_links_in_text(body_html, links)
-            list_items.append(f"<li>{body_html}</li>")
-
-        elif t == "dt":
-            term_html = flatten_doc_node_to_html(elem.get("term", ""), emphasis_map).strip()
-            desc_html = flatten_doc_node_to_html(elem.get("b", ""), emphasis_map).strip()
-            links = elem_links.get(elem_idx)
-            if links:
-                term_html = _embed_links_in_text(term_html, links)
-                desc_html = _embed_links_in_text(desc_html, links)
-            parts.append(f"<dl><dt>{term_html}</dt><dd>{desc_html}</dd></dl>")
-
-        elif t == "blockquote":
-            body_html = flatten_doc_node_to_html(elem.get("b", ""), emphasis_map).strip()
-            links = elem_links.get(elem_idx)
-            if links:
-                body_html = _embed_links_in_text(body_html, links)
-            attr = elem.get("attr")
-            attr_html = ""
-            if attr is not None:
-                attr_text = flatten_doc_node_to_html(attr).strip()
-                if attr_text:
-                    attr_html = f"<footer>{attr_text}</footer>"
-            parts.append(f"<blockquote><p>{body_html}</p>{attr_html}</blockquote>")
-
-        elif t == "eq" or t == "eq-il":
-            alt = elem.get("alt")
-            if isinstance(alt, str) and alt.strip():
-                eq_text = html.escape(alt.strip())
-            else:
-                eq_text = html.escape(
-                    re.sub(r"\s+", " ", _serialize_math(elem.get("b", ""))).strip()
-                )
-            if t == "eq-il":
-                code_frag = f"<code>${eq_text}$</code>"
-                if parts and parts[-1].startswith("<p>") and parts[-1].endswith("</p>"):
-                    parts[-1] = parts[-1][:-4] + " " + code_frag + "</p>"
-                else:
-                    parts.append(code_frag)
-            else:
-                parts.append(f"<p><code>$ {eq_text} $</code></p>")
-
-        elif t == "fig":
-            body = elem.get("b", {})
-            if isinstance(body, dict) and body.get("func") == "image":
-                source = body.get("source", "")
-                alt_raw = body.get("alt")
-                alt = ""
-                if isinstance(alt_raw, str):
-                    alt = alt_raw.strip()
-                elif alt_raw is not None:
-                    alt = re.sub(r"\s+", " ", _flatten_query_text(alt_raw)).strip()
-                cap_node = elem.get("cap")
-                caption = ""
-                if isinstance(cap_node, dict):
-                    label = build_fig_label(cap_node, "image")
-                    body_text = flatten_doc_node_to_html(cap_node.get("body", ""))
-                    caption = re.sub(r"\s+", " ", f"{label} {body_text}").strip()
-                src_hash = hashlib.sha1(source.encode()).hexdigest()[:6]
-                img_src = html.escape(
-                    f"assets/image.{src_hash}.{asset_hash}.webp", quote=True
-                )
-                alt_attr = (
-                    f' alt="{html.escape(alt, quote=True)}"'
-                    if alt
-                    else ' role="presentation"'
-                )
-                img_tag = f'<img src="{img_src}"{alt_attr}>'
+            elif t == "raw":
+                raw_text = node.get("x", "")
+                copy_id = make_raw_copy_id(raw_text)
                 parts.append(
-                    f"<figure><p>{img_tag}</p>"
-                    f"<figcaption>{caption}</figcaption>"
-                    f"</figure>"
+                    f'<pre id="raw-{copy_id}">'
+                    f"<code>{html.escape(raw_text)}</code></pre>"
                 )
 
-        elif t == "fig-cap":
-            pending_table_cap = elem.get("cap")
+            elif t == "info":
+                body_html = flatten_doc_node_to_html(
+                    node.get("b", ""), emphasis_map
+                )
+                body_html = re.sub(r"\s+", " ", body_html).strip()
+                links = _links_for(node)
+                if links:
+                    body_html = _embed_links_in_text(body_html, links)
+                parts.append(f"<aside><p>{body_html}</p></aside>")
 
-        elif t == "table":
-            table_node = elem.get("b")
-            cap = pending_table_cap
-            pending_table_cap = None
-            if isinstance(table_node, dict):
-                try:
-                    rows = _extract_typst_table_rows(table_node)
-                    table_html = _render_table_html(rows)
-                    if table_html:
-                        if cap is not None and isinstance(cap, dict):
-                            label = build_fig_label(cap, "table")
-                            body_text = flatten_doc_node_to_html(cap.get("body", ""))
-                            caption = re.sub(
-                                r"\s+", " ", f"{label} {body_text}"
-                            ).strip()
-                            parts.append(
-                                f"<figure>{table_html}"
-                                f"<figcaption>{caption}</figcaption>"
-                                f"</figure>"
-                            )
-                        else:
-                            parts.append(table_html)
-                except Exception:
-                    pass
+            elif t == "dt":
+                term_html = flatten_doc_node_to_html(
+                    node.get("term", ""), emphasis_map
+                ).strip()
+                desc_html = flatten_doc_node_to_html(
+                    node.get("b", ""), emphasis_map
+                ).strip()
+                links = _links_for(node)
+                if links:
+                    term_html = _embed_links_in_text(term_html, links)
+                    desc_html = _embed_links_in_text(desc_html, links)
+                parts.append(
+                    f"<dl><dt>{term_html}</dt><dd>{desc_html}</dd></dl>"
+                )
 
-    # Flush any list still in progress at end of document
-    flush_list()
+            elif t in ("eq", "eq-il"):
+                alt = node.get("alt")
+                if isinstance(alt, str) and alt.strip():
+                    eq_text = html.escape(alt.strip())
+                else:
+                    eq_text = html.escape(
+                        re.sub(
+                            r"\s+", " ", _serialize_math(node.get("b", ""))
+                        ).strip()
+                    )
+                if t == "eq-il":
+                    code_frag = f"<code>${eq_text}$</code>"
+                    if (
+                        parts
+                        and parts[-1].startswith("<p>")
+                        and parts[-1].endswith("</p>")
+                    ):
+                        parts[-1] = (
+                            parts[-1][:-4] + " " + code_frag + "</p>"
+                        )
+                    else:
+                        parts.append(code_frag)
+                else:
+                    parts.append(f"<p><code>$ {eq_text} $</code></p>")
 
-    result = "\n".join(parts)
+            elif t == "fig":
+                body = node.get("b", {})
+                if isinstance(body, dict) and body.get("func") == "image":
+                    source = body.get("source", "")
+                    alt_raw = body.get("alt")
+                    alt = ""
+                    if isinstance(alt_raw, str):
+                        alt = alt_raw.strip()
+                    elif alt_raw is not None:
+                        alt = re.sub(
+                            r"\s+", " ", _flatten_query_text(alt_raw)
+                        ).strip()
+                    cap_node = node.get("cap")
+                    caption = ""
+                    if isinstance(cap_node, dict):
+                        label = fig_label(cap_node, "image")
+                        body_text = flatten_doc_node_to_html(
+                            cap_node.get("body", "")
+                        )
+                        caption = re.sub(
+                            r"\s+", " ", f"{label} {body_text}"
+                        ).strip()
+                    src_hash = hashlib.sha1(source.encode()).hexdigest()[:6]
+                    img_src = html.escape(
+                        f"assets/image.{src_hash}.{asset_hash}.webp",
+                        quote=True,
+                    )
+                    alt_attr = (
+                        f' alt="{html.escape(alt, quote=True)}"'
+                        if alt
+                        else ' role="presentation"'
+                    )
+                    parts.append(
+                        f"<figure><p><img"
+                        f' src="{img_src}"{alt_attr}></p>'
+                        f"<figcaption>{caption}</figcaption>"
+                        f"</figure>"
+                    )
+
+        return parts
+
+    body_parts = render(tree, skip_pars=skip_count)
+    body_parts = [p for p in body_parts if p != "<p></p>"]
+    all_parts = header + body_parts
+    result = "\n".join(all_parts)
 
     if nav_links:
         nav_items = "".join(
