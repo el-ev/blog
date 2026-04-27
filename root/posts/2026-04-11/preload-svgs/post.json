@@ -2,6 +2,6 @@
   "title": "Preload SVG Sprites",
   "subtitle": "You can't preload SVG sprites, but you can.",
   "description": "TL;DR: Insert an invisible image referencing the sprite sheet to load on the top of the page.",
-  "source_hash": "61ba6b",
-  "generated_at": "2026-04-26 23:26:50"
+  "source_hash": "8420d2",
+  "generated_at": "2026-04-27 11:53:22"
 }

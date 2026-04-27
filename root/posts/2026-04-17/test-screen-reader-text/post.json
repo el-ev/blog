@@ -2,6 +2,6 @@
   "title": "Test Screen Reader Text",
   "subtitle": null,
   "description": "A link to the homepage should be announced as link text, not as a raw URL.",
-  "source_hash": "286d52",
-  "generated_at": "2026-04-26 23:26:49"
+  "source_hash": "731dbd",
+  "generated_at": "2026-04-27 11:53:22"
 }
