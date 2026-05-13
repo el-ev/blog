@@ -1979,6 +1979,10 @@ def _infer_svg_anchor_role(
         return "textbox"
     if action_token.startswith("form-action:"):
         return "button"
+    if action_token.startswith("checkbox:"):
+        return "checkbox"
+    if action_token.startswith("radio:"):
+        return "radio"
     return None
 
 
@@ -2265,10 +2269,21 @@ def _inject_svg_anchor_accessibility(
     site_base_url: Optional[str] = None,
     action_metadata: Optional[Dict[str, Dict[str, str]]] = None,
 ) -> str:
+    seen_action_hrefs: set = set()
+
     def _rewrite_anchor(match: re.Match) -> str:
         attrs = match.group("attrs")
         body = match.group("body")
         href = _extract_anchor_href(attrs)
+
+        if href and href.strip().startswith("#cond="):
+            rewritten = attrs
+            if not re.search(r"\s+tabindex\s*=", attrs, flags=re.IGNORECASE):
+                rewritten += ' tabindex="-1"'
+            if not re.search(r"\s+aria-hidden\s*=", attrs, flags=re.IGNORECASE):
+                rewritten += ' aria-hidden="true"'
+            return f"<a{rewritten}>{body}</a>"
+
         label = _infer_svg_anchor_label(
             href,
             svg_path=svg_path,
@@ -2296,6 +2311,12 @@ def _inject_svg_anchor_accessibility(
             )
             is not None
         )
+        action_href = href.strip() if href else ""
+        if action_href.startswith("#action=") and not has_tabindex:
+            if action_href in seen_action_hrefs:
+                tabindex = "-1"
+            seen_action_hrefs.add(action_href)
+
         if tabindex is not None and not has_tabindex:
             rewritten_attrs += f' tabindex="{html.escape(tabindex, quote=True)}"'
 
@@ -2491,7 +2512,7 @@ def _replace_driver_image_anchors(
     )
 
 
-_COND_HREF_RE = re.compile(r'href="#cond=([^":]+):([01])"')
+_COND_HREF_RE = re.compile(r'href="#cond=([^"]+):([01])"')
 
 
 _SVG_GA_TAG_RE = re.compile(r"<(/?)([ga])\b([^>]*)>")
@@ -2857,6 +2878,7 @@ def build_html_from_svgs(
 
     has_form_inputs = action_metadata and any(
         k.startswith("input:") or k.startswith("form-action:")
+        or k.startswith("checkbox:") or k.startswith("radio:")
         for k in action_metadata
     )
     if has_form_inputs:

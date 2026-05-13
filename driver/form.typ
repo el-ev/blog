@@ -50,3 +50,55 @@
     if_false
   }
 }
+
+#let _check_indicator(checked) = {
+  let mark = if checked {
+    align(center + horizon, text(size: 0.65em)[✓])
+  }
+  box(
+    width: 0.85em, height: 0.85em,
+    stroke: 0.5pt + luma(120),
+    radius: 0.1em,
+    inset: 0pt,
+  )[#mark]
+}
+
+#let checkbox(id, body) = {
+  show underline: it => it.body
+  action(
+    "checkbox:" + id,
+    [#box(baseline: 0.2em)[#cond(
+      "checkbox:" + id,
+      _check_indicator(false),
+      _check_indicator(true),
+    )] #body],
+    label: id,
+    role: "checkbox",
+  )
+}
+
+#let _radio_indicator(selected) = {
+  let dot = if selected {
+    align(center + horizon, circle(radius: 0.18em, fill: luma(80)))
+  }
+  box(
+    width: 0.85em, height: 0.85em,
+    stroke: 0.5pt + luma(120),
+    radius: 50%,
+    inset: 0pt,
+  )[#dot]
+}
+
+#let radio(group, value, body) = {
+  show underline: it => it.body
+  action(
+    "radio:" + group + ":" + value,
+    [#box(baseline: 0.2em)[#cond(
+      "radio:" + group + ":" + value,
+      _radio_indicator(false),
+      _radio_indicator(true),
+    )] #body],
+    label: group + ": " + value,
+    role: "radio",
+  )
+}

@@ -1,6 +1,8 @@
 (() => {
   const ACTIVE_INPUTS = new Map();
   const SR_INPUTS = new Map();
+  const SR_CHECKBOXES = new Map();
+  const SR_RADIOS = new Map();
   const BOUND_COND_DOCS = new WeakSet();
   const SVG_DOCS = new Set();
 
@@ -77,12 +79,35 @@
   f.get = (id) => {
     const srInput = SR_INPUTS.get(id);
     if (srInput) return srInput.value;
+    const cb = SR_CHECKBOXES.get(id);
+    if (cb) return cb.checked ? 'true' : '';
+    const radios = SR_RADIOS.get(id);
+    if (radios) {
+      for (const r of radios) {
+        if (r.checked) return r.value;
+      }
+      return '';
+    }
     const entry = ACTIVE_INPUTS.get(id);
     return entry ? entry.element.value : '';
   };
 
   f.set = (id, value) => {
     const str = String(value);
+    const cb = SR_CHECKBOXES.get(id);
+    if (cb) {
+      cb.checked = str === 'true';
+      document.dispatchEvent(new CustomEvent('svg-input', {detail: {id, value: str}}));
+      return;
+    }
+    const radios = SR_RADIOS.get(id);
+    if (radios) {
+      for (const r of radios) {
+        r.checked = r.value === str;
+      }
+      document.dispatchEvent(new CustomEvent('svg-input', {detail: {id, value: str}}));
+      return;
+    }
     syncValue(id, str);
     document.dispatchEvent(new CustomEvent('svg-input', {
       detail: {id, value: str},
@@ -119,6 +144,27 @@
     if (!id) return;
     btn.addEventListener('click', () => {
       window.execFormAction?.(id);
+    });
+  });
+
+  document.querySelectorAll('.sr-only-checkbox').forEach((cb) => {
+    const id = cb.dataset.checkboxId;
+    if (!id) return;
+    SR_CHECKBOXES.set(id, cb);
+    f._conds['checkbox:' + id] = () => cb.checked;
+    cb.addEventListener('change', () => {
+      fireInput(id, cb.checked ? 'true' : '');
+    });
+  });
+
+  document.querySelectorAll('.sr-only-radio').forEach((radio) => {
+    const group = radio.dataset.radioGroup;
+    if (!group) return;
+    if (!SR_RADIOS.has(group)) SR_RADIOS.set(group, []);
+    SR_RADIOS.get(group).push(radio);
+    f._conds['radio:' + group + ':' + radio.value] = () => radio.checked;
+    radio.addEventListener('change', () => {
+      fireInput(group, radio.value);
     });
   });
 
@@ -226,5 +272,22 @@
     if (typeof fn === 'function') {
       fn();
     }
+  };
+
+  window.toggleCheckbox = (id) => {
+    const cb = SR_CHECKBOXES.get(id);
+    if (cb) {
+      cb.checked = !cb.checked;
+      fireInput(id, cb.checked ? 'true' : '');
+    }
+  };
+
+  window.selectRadio = (group, value) => {
+    const radios = SR_RADIOS.get(group);
+    if (!radios) return;
+    for (const r of radios) {
+      r.checked = r.value === value;
+    }
+    fireInput(group, value);
   };
 })();

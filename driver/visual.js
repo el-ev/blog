@@ -11,6 +11,8 @@
   const LAYOUT_ACTION = 'layout';
   const INPUT_ACTION_PREFIX = 'input:';
   const FORM_ACTION_PREFIX = 'form-action:';
+  const CHECKBOX_PREFIX = 'checkbox:';
+  const RADIO_PREFIX = 'radio:';
   const BOUND_SVG_DOCUMENTS = new WeakSet();
   const SVG_COLOR_TOKENS = [
     '--svg-paper-bg',
@@ -130,6 +132,23 @@
         return {type: 'form-action', id};
       }
     }
+    if (actionToken.startsWith(CHECKBOX_PREFIX)) {
+      const id = actionToken.slice(CHECKBOX_PREFIX.length).trim();
+      if (id) {
+        return {type: 'checkbox', id};
+      }
+    }
+    if (actionToken.startsWith(RADIO_PREFIX)) {
+      const rest = actionToken.slice(RADIO_PREFIX.length);
+      const colonIdx = rest.indexOf(':');
+      if (colonIdx > 0) {
+        const group = rest.slice(0, colonIdx).trim();
+        const value = rest.slice(colonIdx + 1).trim();
+        if (group && value) {
+          return {type: 'radio', group, value};
+        }
+      }
+    }
     return null;
   };
 
@@ -157,6 +176,14 @@
         setTimeout(() => { g.style.opacity = ''; }, 150);
       }
       window.execFormAction?.(action.id);
+      return;
+    }
+    if (action.type === 'checkbox') {
+      window.toggleCheckbox?.(action.id);
+      return;
+    }
+    if (action.type === 'radio') {
+      window.selectRadio?.(action.group, action.value);
     }
   };
 
@@ -190,7 +217,8 @@
       const isActivation = event.key === ' ' || event.key === 'Spacebar' || event.key === 'Enter';
       const isPrintable = event.key.length === 1 && !event.ctrlKey && !event.altKey && !event.metaKey;
       const isInputNav = event.key === 'ArrowLeft' || event.key === 'ArrowRight';
-      if (!isActivation && !isPrintable && !isInputNav) {
+      const isArrowNav = isInputNav || event.key === 'ArrowUp' || event.key === 'ArrowDown';
+      if (!isActivation && !isPrintable && !isArrowNav) {
         return;
       }
       const eventTarget = event.target;
@@ -205,7 +233,32 @@
       if (!action) {
         return;
       }
-      if ((isPrintable || isInputNav) && action.type !== 'input') {
+      if (isPrintable && !isActivation && action.type !== 'input') {
+        return;
+      }
+      if (isArrowNav && action.type === 'radio') {
+        event.preventDefault();
+        const prefix = ACTION_PREFIX + RADIO_PREFIX + action.group + ':';
+        const allAnchors = [...svgDocument.querySelectorAll('a[href^="' + CSS.escape(prefix) + '"]')];
+        const values = [];
+        const firstAnchor = new Map();
+        for (const a of allAnchors) {
+          const ra = parseSvgAction(readAnchorHref(a));
+          if (ra && ra.type === 'radio' && !firstAnchor.has(ra.value)) {
+            firstAnchor.set(ra.value, a);
+            values.push(ra.value);
+          }
+        }
+        const idx = values.indexOf(action.value);
+        if (idx < 0) return;
+        const forward = event.key === 'ArrowDown' || event.key === 'ArrowRight';
+        const nextIdx = forward ? (idx + 1) % values.length : (idx - 1 + values.length) % values.length;
+        const nextValue = values[nextIdx];
+        firstAnchor.get(nextValue).focus();
+        window.selectRadio?.(action.group, nextValue);
+        return;
+      }
+      if (isArrowNav && action.type !== 'input') {
         return;
       }
       event.preventDefault();

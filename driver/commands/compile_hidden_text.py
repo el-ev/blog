@@ -258,6 +258,40 @@ def _serialize_math(node: Any) -> str:
     return "".join(parts)
 
 
+def _flatten_text_skip_conds(node: Any) -> str:
+    """Like _flatten_query_text but skips link nodes whose dest starts with #cond=."""
+    if isinstance(node, str):
+        return node
+    if isinstance(node, list):
+        return "".join(_flatten_text_skip_conds(item) for item in node)
+    if isinstance(node, dict):
+        func = node.get("func")
+        if func == "space":
+            return " "
+        if func == "linebreak":
+            return "\n"
+        if func == "link":
+            dest = node.get("dest", "")
+            if isinstance(dest, str) and dest.startswith("#cond="):
+                return ""
+            return _flatten_text_skip_conds(node.get("body", ""))
+        parts: list = []
+        text = node.get("text")
+        if isinstance(text, str):
+            parts.append(text)
+        for key in ("body", "children", "child", "value", "values", "content"):
+            if key in node:
+                parts.append(_flatten_text_skip_conds(node[key]))
+        if not parts:
+            for key, value in node.items():
+                if key in ("func", "text"):
+                    continue
+                if isinstance(value, (dict, list)):
+                    parts.append(_flatten_text_skip_conds(value))
+        return "".join(parts)
+    return ""
+
+
 def _collect_emphasis_text(
     emphasis_elems: List[Dict[str, Any]],
 ) -> Dict[str, str]:
@@ -309,8 +343,11 @@ def flatten_doc_node_to_html(
             if isinstance(dest, str) and dest.startswith("#cond="):
                 m = re.match(r"#cond=(.+):([01])$", dest)
                 if m:
-                    cond_id = html.escape(m.group(1), quote=True)
+                    cond_id = m.group(1)
                     branch = m.group(2)
+                    if cond_id.startswith("checkbox:") or cond_id.startswith("radio:"):
+                        return ""
+                    cond_id = html.escape(cond_id, quote=True)
                     hide = ' style="display:none"' if branch == "1" else ""
                     return (
                         f'<span data-cond-id="{cond_id}"'
@@ -507,13 +544,51 @@ def build_hidden_text(
                         f' data-action-id="{esc_id}">'
                         f"{html.escape(label)}</button>"
                     )
+                elif href.startswith("#action=checkbox:"):
+                    cb_id = href[len("#action=checkbox:"):]
+                    cb_label = re.sub(
+                        r"\s+", " ", _flatten_text_skip_conds(node.get("b", ""))
+                    ).strip()
+                    esc_id = html.escape(cb_id, quote=True)
+                    esc_label = html.escape(cb_label or cb_id, quote=True)
+                    label_suffix = f" {html.escape(cb_label)}" if cb_label else ""
+                    frag = (
+                        f' <input type="checkbox" class="sr-only-checkbox"'
+                        f' data-checkbox-id="{esc_id}"'
+                        f' aria-label="{esc_label}">'
+                        f"{label_suffix}"
+                    )
+                elif href.startswith("#action=radio:"):
+                    rest = href[len("#action=radio:"):]
+                    colon_idx = rest.find(":")
+                    if colon_idx > 0:
+                        r_group = rest[:colon_idx]
+                        r_value = rest[colon_idx + 1:]
+                        r_label = re.sub(
+                            r"\s+", " ", _flatten_text_skip_conds(node.get("b", ""))
+                        ).strip()
+                        esc_group = html.escape(r_group, quote=True)
+                        esc_value = html.escape(r_value, quote=True)
+                        esc_label = html.escape(r_label or f"{r_group}: {r_value}", quote=True)
+                        label_suffix = f" {html.escape(r_label)}" if r_label else ""
+                        frag = (
+                            f' <input type="radio" class="sr-only-radio"'
+                            f' name="{esc_group}" value="{esc_value}"'
+                            f' data-radio-group="{esc_group}"'
+                            f' aria-label="{esc_label}">'
+                            f"{label_suffix}"
+                        )
                 if frag is not None:
-                    suffix = trailing_residual or ""
-                    trailing_residual = None
-                    if parts and parts[-1].endswith("</p>"):
-                        parts[-1] = parts[-1][:-4] + frag + suffix + "</p>"
+                    is_standalone = href.startswith("#action=checkbox:") or href.startswith("#action=radio:")
+                    if is_standalone:
+                        parts.append(frag.strip())
                     else:
-                        parts.append(frag.strip() + suffix)
+                        suffix = trailing_residual or ""
+                        trailing_residual = None
+                        if parts and parts[-1].endswith("</p>"):
+                            parts[-1] = parts[-1][:-4] + frag + suffix + "</p>"
+                        else:
+                            parts.append(frag.strip() + suffix)
                 continue
 
             if t == "par" and skip_pars > 0 and skipped_pars < skip_pars:
