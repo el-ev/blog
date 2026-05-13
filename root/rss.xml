@@ -6,12 +6,12 @@
     <description>It is unlikely that there will be many posts here.</description>
     <language>en-us</language>
     <atom:link href="https://blog.owo.li/rss.xml" rel="self" type="application/rss+xml" />
-    <lastBuildDate>Sun, 26 Apr 2026 00:00:00 +0000</lastBuildDate>
+    <lastBuildDate>Mon, 27 Apr 2026 00:00:00 +0000</lastBuildDate>
     <item>
       <title>Test Form</title>
-      <link>https://blog.owo.li/posts/2026-04-26/test-form/index.html</link>
-      <guid isPermaLink="true">https://blog.owo.li/posts/2026-04-26/test-form/index.html</guid>
-      <pubDate>Sun, 26 Apr 2026 00:00:00 +0000</pubDate>
+      <link>https://blog.owo.li/posts/2026-04-27/test-form/index.html</link>
+      <guid isPermaLink="true">https://blog.owo.li/posts/2026-04-27/test-form/index.html</guid>
+      <pubDate>Mon, 27 Apr 2026 00:00:00 +0000</pubDate>
       <description>This page tests interactive form components rendered inside and outside SVG.</description>
     </item>
     <item>

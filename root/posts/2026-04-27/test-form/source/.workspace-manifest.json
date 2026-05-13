@@ -1,10 +1,10 @@
 {
   "workspace": "test-form",
-  "publish_date": "2026-04-26",
+  "publish_date": "2026-04-27",
   "revision": "test-form",
   "files": [
     "form-hooks.js",
     "main.typ"
   ],
-  "generated_at": "2026-04-26T22:01:58"
+  "generated_at": "2026-04-27T23:17:50"
 }
