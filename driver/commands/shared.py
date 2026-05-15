@@ -15,6 +15,10 @@ from .utils import (
 )
 
 
+def driver_dir() -> str:
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
 def build_asset_ctx(driver_dir: str, root_dir: str) -> DriverAssetContext:
     web_assets = build_web_assets(driver_dir, root_dir)
     assets_dir = os.path.join(root_dir, WEB_ASSETS_DIR_NAME)

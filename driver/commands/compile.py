@@ -14,6 +14,7 @@ from .compile_hidden_text import (
 )
 from .shared import (
     build_asset_ctx,
+    driver_dir,
     page_url,
     resolve_base_url,
 )
@@ -26,8 +27,8 @@ from .utils import (
     build_page_head_title,
     compile_html,
     first_desc,
-    decl_str,
-    need_decl_str,
+    decl_str_from_source,
+    need_decl_str_from_source,
     prev_rev,
     make_temp_dir,
     make_inputs,
@@ -290,19 +291,16 @@ def run_compile(args: Namespace) -> None:
             args, build_base, workspace_name
         )
 
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        base_dir = driver_dir()
         asset_context = build_asset_ctx(base_dir, args.root_dir)
         compile_sources = _prepare_compile_sources(
             base_dir,
             workspace_path,
         )
-        post_title = need_decl_str(
-            compile_sources.main_typ_path,
-            "title",
-        )
-        post_subtitle = decl_str(
-            compile_sources.main_typ_path, "subtitle"
-        )
+        with open(compile_sources.main_typ_path, "r", encoding="utf-8") as f:
+            main_typ_source = f.read()
+        post_title = need_decl_str_from_source(main_typ_source, "title")
+        post_subtitle = decl_str_from_source(main_typ_source, "subtitle")
 
         posts_dir = os.path.join(args.root_dir, "posts")
         skip_latest = getattr(args, "amend", False)

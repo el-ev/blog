@@ -1,11 +1,11 @@
-import json
 import os
 import shutil
 import sys
 from argparse import Namespace
-from typing import Any, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 from .revisions import latest_rev
+from .submission_workspace import load_manifest
 from .utils import safe_join_child
 
 
@@ -18,13 +18,8 @@ def _find_latest_post_directory(
     return latest.date, latest.entry_name, latest.path
 
 
-def _recover_from_manifest(
-    source_dir: str, workspace_path: str, manifest_path: str
-) -> int:
-    with open(manifest_path, "r", encoding="utf-8") as f:
-        manifest: Any = json.load(f)
-
-    manifest_files: List[str] = manifest["files"]
+def _recover_from_manifest(source_dir: str, workspace_path: str) -> int:
+    manifest_files: List[str] = load_manifest(source_dir)["files"]
 
     copied_count = 0
     for rel_path in manifest_files:
@@ -82,7 +77,7 @@ def run_recover(args: Namespace) -> None:
         )
         sys.exit(1)
 
-    copied_count = _recover_from_manifest(source_dir, workspace_path, manifest_path)
+    copied_count = _recover_from_manifest(source_dir, workspace_path)
 
     if copied_count == 0:
         print(

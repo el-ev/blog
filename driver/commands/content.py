@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 from .shared import (
     page_url,
     build_asset_ctx,
+    driver_dir,
     refresh_glyphs,
     resolve_base_url,
 )
@@ -187,7 +188,7 @@ def _build_rss_lines(
 
 
 def update_content(args: Namespace) -> None:
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    base_dir = driver_dir()
     root_dir: str = args.root_dir
     os.makedirs(root_dir, exist_ok=True)
 

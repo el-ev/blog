@@ -11,6 +11,7 @@ from .compile import run_compile
 from .content import update_content
 from .shared import (
     build_asset_ctx,
+    driver_dir,
     page_url,
     refresh_glyphs,
     resolve_base_url,
@@ -36,9 +37,9 @@ from .submission_workspace import (
     write_manifest,
 )
 from .utils import (
-    decl_str,
+    decl_str_from_source,
     first_desc,
-    need_decl_str,
+    need_decl_str_from_source,
     make_temp_dir,
     minify_html,
     safe_join_child,
@@ -117,15 +118,17 @@ def _submit_to_destination(
         compile_args.public_output_dir_override = dest_dir
         run_compile(compile_args)
 
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        base_dir = driver_dir()
         asset_context = build_asset_ctx(base_dir, args.root_dir)
 
         source_dest_dir = os.path.join(dest_dir, "source")
         sync_snapshot(stage_path, source_dest_dir)
 
         main_typ_path = os.path.join(stage_path, "main.typ")
-        post_title = need_decl_str(main_typ_path, "title")
-        post_subtitle = decl_str(main_typ_path, "subtitle")
+        with open(main_typ_path, "r", encoding="utf-8") as f:
+            main_typ_source = f.read()
+        post_title = need_decl_str_from_source(main_typ_source, "title")
+        post_subtitle = decl_str_from_source(main_typ_source, "subtitle")
         pdf_name, post_asset_hash = extract_post_pdf_name(dest_dir)
 
         meta_generated_at: Optional[str] = None

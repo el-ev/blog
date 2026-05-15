@@ -23,6 +23,20 @@ _lightningcss_command: Optional[List[str]] = None
 _lightningcss_command_checked = False
 _lightningcss_missing_warned = False
 _terser_missing_warned = False
+_ACTION_HREF_PREFIX = "#action="
+_COND_HREF_PREFIX = "#cond="
+_COPY_PREFIX = "copy:"
+_INPUT_PREFIX = "input:"
+_FORM_ACTION_PREFIX = "form-action:"
+_CHECKBOX_PREFIX = "checkbox:"
+_RADIO_PREFIX = "radio:"
+_FORM_ACTION_PREFIXES = (
+    _INPUT_PREFIX,
+    _FORM_ACTION_PREFIX,
+    _CHECKBOX_PREFIX,
+    _RADIO_PREFIX,
+)
+
 _WORKSPACE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _TYPST_DECLARED_STRING_PATTERN_TEMPLATE = r'#let\s+{name}\s*=\s*"([^"]*)"'
 _TYPST_DECLARED_CONTENT_PATTERN_TEMPLATE = r"#let\s+{name}\s*=\s*\[(.*?)\]"
@@ -588,18 +602,6 @@ def need_decl_str_from_source(source: str, name: str) -> str:
     return value
 
 
-def decl_str(path: str, name: str) -> Optional[str]:
-    with open(path, "r", encoding="utf-8") as f:
-        return decl_str_from_source(f.read(), name)
-
-
-def need_decl_str(path: str, name: str) -> str:
-    value = decl_str(path, name)
-    if value is None:
-        raise RuntimeError(f"Missing required {name} declaration in '{path}'.")
-    return value
-
-
 def _remove_stale_hashed_assets(
     asset_dir: str,
     prefix: str,
@@ -924,11 +926,11 @@ def _resolve_pdf_creation_timestamp(inputs: Optional[Dict[str, str]]) -> Optiona
     return str(int(parsed_date.replace(tzinfo=timezone.utc).timestamp()))
 
 
-def _flatten_query_text(node: Any) -> str:
+def _flatten_query_text(node: Any, skip_cond_links: bool = False) -> str:
     if isinstance(node, str):
         return node
     if isinstance(node, list):
-        return "".join(_flatten_query_text(item) for item in node)
+        return "".join(_flatten_query_text(item, skip_cond_links) for item in node)
     if isinstance(node, dict):
         func = node["func"] if "func" in node else None
         if func == "space":
@@ -937,6 +939,11 @@ def _flatten_query_text(node: Any) -> str:
             return "\n"
         if func == "smartquote":
             return '"' if ("double" in node and bool(node["double"])) else "'"
+        if skip_cond_links and func == "link":
+            dest = node.get("dest", "")
+            if isinstance(dest, str) and dest.startswith(_COND_HREF_PREFIX):
+                return ""
+            return _flatten_query_text(node.get("body", ""), skip_cond_links)
 
         parts: List[str] = []
         text = node["text"] if "text" in node else None
@@ -944,13 +951,13 @@ def _flatten_query_text(node: Any) -> str:
             parts.append(text)
         for key in ("body", "children", "child", "value", "values", "content"):
             if key in node:
-                parts.append(_flatten_query_text(node[key]))
+                parts.append(_flatten_query_text(node[key], skip_cond_links))
         if not parts:
             for key, value in node.items():
                 if key in ("func", "text"):
                     continue
                 if isinstance(value, (dict, list)):
-                    parts.append(_flatten_query_text(value))
+                    parts.append(_flatten_query_text(value, skip_cond_links))
         return "".join(parts)
     return ""
 
@@ -1951,10 +1958,10 @@ def _parse_svg_action_href(href: Optional[str]) -> Tuple[Optional[str], Dict[str
         return None, {}
 
     stripped_href = href.strip()
-    if not stripped_href.startswith("#action="):
+    if not stripped_href.startswith(_ACTION_HREF_PREFIX):
         return None, {}
 
-    action_payload = stripped_href[len("#action=") :]
+    action_payload = stripped_href[len(_ACTION_HREF_PREFIX) :]
     try:
         action_payload = unquote(action_payload)
     except Exception:
@@ -1962,40 +1969,40 @@ def _parse_svg_action_href(href: Optional[str]) -> Tuple[Optional[str], Dict[str
     return _parse_action_payload(action_payload)
 
 
-def _infer_svg_anchor_role(
-    href: Optional[str],
-    action_metadata: Optional[Dict[str, Dict[str, str]]] = None,
-) -> Optional[str]:
-    action_token, _ = _parse_svg_action_href(href)
-    if action_token is None:
-        return None
-    meta = (action_metadata or {}).get(action_token, {})
-    role = meta.get("role", "")
-    if role:
-        return role
-    if action_token == "theme" or action_token.startswith("copy:"):
+def _action_token_role(action_token: str) -> Optional[str]:
+    if action_token == "theme" or action_token.startswith(_COPY_PREFIX):
         return "button"
-    if action_token.startswith("input:"):
+    if action_token.startswith(_INPUT_PREFIX):
         return "textbox"
-    if action_token.startswith("form-action:"):
+    if action_token.startswith(_FORM_ACTION_PREFIX):
         return "button"
-    if action_token.startswith("checkbox:"):
+    if action_token.startswith(_CHECKBOX_PREFIX):
         return "checkbox"
-    if action_token.startswith("radio:"):
+    if action_token.startswith(_RADIO_PREFIX):
         return "radio"
     return None
 
 
-def _infer_svg_anchor_tabindex(
-    href: Optional[str],
+def _action_token_label(action_token: str) -> str:
+    if action_token == "theme":
+        return "Theme"
+    if action_token.startswith(_COPY_PREFIX):
+        return "Copy"
+    if action_token.startswith(_INPUT_PREFIX):
+        return "Input"
+    return "Action"
+
+
+def _infer_svg_anchor_attrs(
+    action_token: Optional[str],
     action_metadata: Optional[Dict[str, Dict[str, str]]] = None,
-) -> Optional[str]:
-    action_token, _ = _parse_svg_action_href(href)
+) -> Tuple[Optional[str], Optional[str]]:
     if action_token is None:
-        return None
+        return None, None
     meta = (action_metadata or {}).get(action_token, {})
-    tabindex = meta.get("tabindex", "")
-    return tabindex if tabindex else None
+    role = meta.get("role") or _action_token_role(action_token)
+    tabindex = meta.get("tabindex") or None
+    return role, tabindex
 
 
 _INDEX_HTML_SEGMENT_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -2210,24 +2217,13 @@ def _infer_svg_anchor_label(
     if not stripped_href:
         return None
 
-    if stripped_href.startswith("#cond="):
+    if stripped_href.startswith(_COND_HREF_PREFIX):
         return None
 
     action_token, _ = _parse_svg_action_href(href)
     if action_token is not None:
         meta = (action_metadata or {}).get(action_token, {})
-        label = meta.get("label", "")
-        if label:
-            return label
-        if action_token == "theme":
-            return "Theme"
-        if action_token.startswith("copy:"):
-            return "Copy"
-        if action_token.startswith("input:"):
-            return "Input"
-        if action_token.startswith("form-action:"):
-            return "Action"
-        return "Action"
+        return meta.get("label") or _action_token_label(action_token)
 
     normalized_internal_href = _normalize_site_href_for_label(
         stripped_href,
@@ -2276,7 +2272,7 @@ def _inject_svg_anchor_accessibility(
         body = match.group("body")
         href = _extract_anchor_href(attrs)
 
-        if href and href.strip().startswith("#cond="):
+        if href and href.strip().startswith(_COND_HREF_PREFIX):
             rewritten = attrs
             if not re.search(r"\s+tabindex\s*=", attrs, flags=re.IGNORECASE):
                 rewritten += ' tabindex="-1"'
@@ -2294,7 +2290,8 @@ def _inject_svg_anchor_accessibility(
             return match.group(0)
 
         rewritten_attrs = attrs
-        role = _infer_svg_anchor_role(href, action_metadata=action_metadata)
+        action_token, _ = _parse_svg_action_href(href)
+        role, tabindex = _infer_svg_anchor_attrs(action_token, action_metadata)
         has_role = (
             re.search(r"\s+role\s*=\s*['\"][^'\"]+['\"]", attrs, flags=re.IGNORECASE)
             is not None
@@ -2302,7 +2299,6 @@ def _inject_svg_anchor_accessibility(
         if role is not None and not has_role:
             rewritten_attrs += f' role="{html.escape(role, quote=True)}"'
 
-        tabindex = _infer_svg_anchor_tabindex(href, action_metadata=action_metadata)
         has_tabindex = (
             re.search(
                 r"\s+tabindex\s*=\s*['\"][^'\"]*['\"]",
@@ -2312,7 +2308,7 @@ def _inject_svg_anchor_accessibility(
             is not None
         )
         action_href = href.strip() if href else ""
-        if action_href.startswith("#action=") and not has_tabindex:
+        if action_href.startswith(_ACTION_HREF_PREFIX) and not has_tabindex:
             if action_href in seen_action_hrefs:
                 tabindex = "-1"
             seen_action_hrefs.add(action_href)
@@ -2877,9 +2873,7 @@ def build_html_from_svgs(
     index_content = index_content.replace("{{VISUAL_SRC}}", html.escape(visual_src))
 
     has_form_inputs = action_metadata and any(
-        k.startswith("input:") or k.startswith("form-action:")
-        or k.startswith("checkbox:") or k.startswith("radio:")
-        for k in action_metadata
+        k.startswith(_FORM_ACTION_PREFIXES) for k in action_metadata
     )
     if has_form_inputs:
         form_src = build_root_asset_href(

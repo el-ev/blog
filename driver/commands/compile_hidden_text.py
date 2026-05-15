@@ -258,40 +258,6 @@ def _serialize_math(node: Any) -> str:
     return "".join(parts)
 
 
-def _flatten_text_skip_conds(node: Any) -> str:
-    """Like _flatten_query_text but skips link nodes whose dest starts with #cond=."""
-    if isinstance(node, str):
-        return node
-    if isinstance(node, list):
-        return "".join(_flatten_text_skip_conds(item) for item in node)
-    if isinstance(node, dict):
-        func = node.get("func")
-        if func == "space":
-            return " "
-        if func == "linebreak":
-            return "\n"
-        if func == "link":
-            dest = node.get("dest", "")
-            if isinstance(dest, str) and dest.startswith("#cond="):
-                return ""
-            return _flatten_text_skip_conds(node.get("body", ""))
-        parts: list = []
-        text = node.get("text")
-        if isinstance(text, str):
-            parts.append(text)
-        for key in ("body", "children", "child", "value", "values", "content"):
-            if key in node:
-                parts.append(_flatten_text_skip_conds(node[key]))
-        if not parts:
-            for key, value in node.items():
-                if key in ("func", "text"):
-                    continue
-                if isinstance(value, (dict, list)):
-                    parts.append(_flatten_text_skip_conds(value))
-        return "".join(parts)
-    return ""
-
-
 def _collect_emphasis_text(
     emphasis_elems: List[Dict[str, Any]],
 ) -> Dict[str, str]:
@@ -547,7 +513,7 @@ def build_hidden_text(
                 elif href.startswith("#action=checkbox:"):
                     cb_id = href[len("#action=checkbox:"):]
                     cb_label = re.sub(
-                        r"\s+", " ", _flatten_text_skip_conds(node.get("b", ""))
+                        r"\s+", " ", _flatten_query_text(node.get("b", ""), skip_cond_links=True)
                     ).strip()
                     esc_id = html.escape(cb_id, quote=True)
                     esc_label = html.escape(cb_label or cb_id, quote=True)
@@ -565,7 +531,7 @@ def build_hidden_text(
                         r_group = rest[:colon_idx]
                         r_value = rest[colon_idx + 1:]
                         r_label = re.sub(
-                            r"\s+", " ", _flatten_text_skip_conds(node.get("b", ""))
+                            r"\s+", " ", _flatten_query_text(node.get("b", ""), skip_cond_links=True)
                         ).strip()
                         esc_group = html.escape(r_group, quote=True)
                         esc_value = html.escape(r_value, quote=True)
